@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Shield, Clock, BarChart3, Lock, Save, ChevronLeft } from 'lucide-react';
@@ -348,7 +348,12 @@ function SettingsPanel() {
   const updateSettings = useGameStore(s => s.updateSettings);
   const weeklyReport = useGameStore(s => s.weeklyReport);
   const getSkillScores = useGameStore(s => s.getSkillScores);
+  const initStore = useGameStore(s => s.initStore);
   const todayPlayTime = useGameStore(s => s.todayPlayTime);
+
+  useEffect(() => {
+    initStore();
+  }, [initStore]);
 
   const [saved, setSaved] = useState(false);
   const [showChangePin, setShowChangePin] = useState(false);

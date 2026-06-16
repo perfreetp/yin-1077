@@ -14,6 +14,7 @@ const KEY_TO_NOTE: Record<string, string> = {
   b: 'G3', n: 'A3',
   a: 'C4', s: 'D4', d: 'E4', f: 'F4',
   g: 'G4', h: 'A4', j: 'B4', k: 'C5',
+  q: 'D5', w: 'E5', e: 'F5', r: 'G5', t: 'A5',
 };
 
 const NOTE_TO_KEY: Record<string, string> = {
@@ -21,6 +22,7 @@ const NOTE_TO_KEY: Record<string, string> = {
   G3: 'B', A3: 'N',
   C4: 'A', D4: 'S', E4: 'D', F4: 'F',
   G4: 'G', A4: 'H', B4: 'J', C5: 'K',
+  D5: 'Q', E5: 'W', F5: 'E', G5: 'R', A5: 'T',
 };
 
 const NOTE_POSITIONS: Record<string, number> = {
@@ -52,6 +54,9 @@ export default function LevelPage() {
   const navigate = useNavigate();
   const completeLevel = useGameStore(s => s.completeLevel);
   const player = useGameStore(s => s.player);
+  const startLevelSession = useGameStore(s => s.startLevelSession);
+  const endLevelSession = useGameStore(s => s.endLevelSession);
+  const isDailyTimeExceeded = useGameStore(s => s.isDailyTimeExceeded);
 
   const levelId = Number(id);
   const level = getLevelById(levelId);
@@ -92,6 +97,22 @@ export default function LevelPage() {
     }
     allNotesRef.current = notes;
   }, [level]);
+
+  useEffect(() => {
+    startLevelSession();
+    return () => {
+      endLevelSession();
+    };
+  }, [startLevelSession, endLevelSession]);
+
+  useEffect(() => {
+    if (isDailyTimeExceeded()) {
+      const timer = setTimeout(() => {
+        navigate('/map');
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [isDailyTimeExceeded, navigate]);
 
   const area = level ? AREAS.find(a => a.id === level.areaId) : null;
   const theme = area?.theme ?? 'forest';
@@ -507,6 +528,27 @@ export default function LevelPage() {
                   className={`flex flex-col items-center justify-center w-10 h-10 rounded-lg text-xs font-bold transition-all
                     ${isExpected
                       ? 'bg-orange-400 text-white scale-110 shadow-lg shadow-orange-300'
+                      : 'bg-white/60 text-gray-600'
+                    }`}
+                >
+                  <span className="text-[10px] opacity-70">{note}</span>
+                  <span>{key}</span>
+                </div>
+              );
+            })}
+          </div>
+          <div className="flex items-center gap-1 flex-wrap justify-center">
+            <span className="text-[10px] text-purple-500 font-bold mr-1">高音</span>
+            {['Q=D5', 'W=E5', 'E=F5', 'R=G5', 'T=A5'].map((mapping) => {
+              const [key, note] = mapping.split('=');
+              const currentNote = allNotesRef.current[currentNoteIndex];
+              const isExpected = phase === 'playing' && currentNote?.pitch === note;
+              return (
+                <div
+                  key={key}
+                  className={`flex flex-col items-center justify-center w-10 h-10 rounded-lg text-xs font-bold transition-all
+                    ${isExpected
+                      ? 'bg-purple-400 text-white scale-110 shadow-lg shadow-purple-300'
                       : 'bg-white/60 text-gray-600'
                     }`}
                 >

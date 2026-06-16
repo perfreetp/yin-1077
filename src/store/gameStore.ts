@@ -17,6 +17,7 @@ const STORAGE_KEYS = {
   inventory: 'sightread_inventory',
   settings: 'sightread_settings',
   weeklyReport: 'sightread_weekly_report',
+  dailyTime: 'sightread_daily_time',
 };
 
 function loadFromStorage<T>(key: string, fallback: T): T {
@@ -100,6 +101,7 @@ interface GameStore {
   weeklyReport: WeeklyReport;
   todayPlayTime: number;
   lastPlayDate: string;
+  levelSessionStartTime: number | null;
 
   initStore: () => void;
   setPlayerName: (name: string) => void;
@@ -121,6 +123,8 @@ interface GameStore {
   isLevelUnlocked: (levelId: number) => boolean;
   getAreaProgress: (areaId: number) => { completed: number; total: number; stars: number };
   getSkillScores: () => SkillScore;
+  startLevelSession: () => void;
+  endLevelSession: () => void;
 }
 
 function migrateReport(report: WeeklyReport): WeeklyReport {
@@ -131,22 +135,45 @@ function migrateReport(report: WeeklyReport): WeeklyReport {
   };
 }
 
-export const useGameStore = create<GameStore>((set, get) => ({
-  player: loadFromStorage(STORAGE_KEYS.player, createDefaultPlayer()),
-  progress: loadFromStorage(STORAGE_KEYS.progress, createDefaultProgress()),
-  inventory: loadFromStorage(STORAGE_KEYS.inventory, []),
-  settings: loadFromStorage(STORAGE_KEYS.settings, createDefaultSettings()),
-  weeklyReport: migrateReport(loadFromStorage(STORAGE_KEYS.weeklyReport, createDefaultWeeklyReport())),
-  todayPlayTime: 0,
-  lastPlayDate: '',
+interface DailyTimeData {
+  date: string;
+  minutes: number;
+}
 
-  initStore: () => {
-    const today = new Date().toDateString();
-    const state = get();
-    if (state.lastPlayDate !== today) {
-      set({ todayPlayTime: 0, lastPlayDate: today });
-    }
-  },
+function loadDailyTime(): DailyTimeData {
+  const today = new Date().toDateString();
+  const data = loadFromStorage<DailyTimeData>(STORAGE_KEYS.dailyTime, { date: today, minutes: 0 });
+  if (data.date !== today) {
+    return { date: today, minutes: 0 };
+  }
+  return data;
+}
+
+function saveDailyTime(minutes: number): void {
+  const data: DailyTimeData = {
+    date: new Date().toDateString(),
+    minutes,
+  };
+  saveToStorage(STORAGE_KEYS.dailyTime, data);
+}
+
+export const useGameStore = create<GameStore>((set, get) => {
+  const dailyTime = loadDailyTime();
+
+  return {
+    player: loadFromStorage(STORAGE_KEYS.player, createDefaultPlayer()),
+    progress: loadFromStorage(STORAGE_KEYS.progress, createDefaultProgress()),
+    inventory: loadFromStorage(STORAGE_KEYS.inventory, []),
+    settings: loadFromStorage(STORAGE_KEYS.settings, createDefaultSettings()),
+    weeklyReport: migrateReport(loadFromStorage(STORAGE_KEYS.weeklyReport, createDefaultWeeklyReport())),
+    todayPlayTime: dailyTime.minutes,
+    lastPlayDate: dailyTime.date,
+    levelSessionStartTime: null,
+
+    initStore: () => {
+      const dailyTime = loadDailyTime();
+      set({ todayPlayTime: dailyTime.minutes, lastPlayDate: dailyTime.date });
+    },
 
   setPlayerName: (name) => {
     const player = { ...get().player, name };
@@ -370,18 +397,31 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   addPlayTime: (minutes) => {
-    const today = new Date().toDateString();
-    const state = get();
-    if (state.lastPlayDate !== today) {
-      set({ todayPlayTime: minutes, lastPlayDate: today });
-    } else {
-      set({ todayPlayTime: state.todayPlayTime + minutes });
-    }
+    const dailyTime = loadDailyTime();
+    const newMinutes = dailyTime.minutes + minutes;
+    saveDailyTime(newMinutes);
+    set({ todayPlayTime: newMinutes, lastPlayDate: dailyTime.date });
   },
 
   isDailyTimeExceeded: () => {
-    const { todayPlayTime, settings } = get();
-    return todayPlayTime >= settings.dailyTimeLimit;
+    const dailyTime = loadDailyTime();
+    const settings = get().settings;
+    return dailyTime.minutes >= settings.dailyTimeLimit;
+  },
+
+  startLevelSession: () => {
+    set({ levelSessionStartTime: Date.now() });
+  },
+
+  endLevelSession: () => {
+    const { levelSessionStartTime } = get();
+    if (levelSessionStartTime) {
+      const elapsedMs = Date.now() - levelSessionStartTime;
+      const elapsedMinutes = Math.max(0.1, elapsedMs / 60000);
+      const roundedMinutes = Math.round(elapsedMinutes * 10) / 10;
+      get().addPlayTime(roundedMinutes);
+    }
+    set({ levelSessionStartTime: null });
   },
 
   getLevelProgress: (levelId) => get().progress.find(p => p.levelId === levelId),
@@ -406,4 +446,5 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   getSkillScores: () => get().weeklyReport.scores,
-}));
+};
+});
