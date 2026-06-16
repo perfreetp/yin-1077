@@ -104,6 +104,54 @@ export interface WeeklyReport {
   masteredKeys: string[];
 }
 
+export type PracticeSpeed = 'normal' | 'slow' | 'phrase';
+
+export interface PracticeSession {
+  id: string;
+  levelId: number;
+  levelName: string;
+  areaId: number;
+  areaName: string;
+  skillType: SkillType;
+  speed: PracticeSpeed;
+  startTime: string;
+  endTime: string;
+  durationMinutes: number;
+  accuracy: number;
+  passed: boolean;
+  stars: number;
+  wrongNoteCount: number;
+  missedNoteCount: number;
+  rhythmDeviationAvg: number;
+  skillScore: number;
+}
+
+export interface DailyPracticeLog {
+  date: string;
+  sessions: PracticeSession[];
+}
+
+export interface SkillTrendPoint {
+  date: string;
+  score: number;
+}
+
+export interface SkillTrend {
+  skill: SkillType;
+  points: SkillTrendPoint[];
+  trend: 'improving' | 'stable' | 'declining';
+}
+
+export interface FailedLevelRecord {
+  levelId: number;
+  levelName: string;
+  areaId: number;
+  areaName: string;
+  failCount: number;
+  lastAttempt: string;
+  avgAccuracy: number;
+}
+
 export const ALL_RHYTHM_PATTERNS = [
   '四分音符', '二分音符', '全音符', '八分音符',
   '四分休止', '二分休止',

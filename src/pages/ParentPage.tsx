@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Shield, Clock, BarChart3, Lock, Save, ChevronLeft } from 'lucide-react';
 import { useGameStore } from '@/store/gameStore';
 import { SKILL_LABELS } from '@/types';
-import type { SkillType } from '@/types';
+import type { SkillType, PracticeSpeed } from '@/types';
 
 const TIME_OPTIONS = [15, 30, 45, 60, 90, 120];
 
@@ -350,6 +350,7 @@ function SettingsPanel() {
   const getSkillScores = useGameStore(s => s.getSkillScores);
   const initStore = useGameStore(s => s.initStore);
   const todayPlayTime = useGameStore(s => s.todayPlayTime);
+  const getTodaySessions = useGameStore(s => s.getTodaySessions);
 
   useEffect(() => {
     initStore();
@@ -362,6 +363,22 @@ function SettingsPanel() {
   const [maxDifficulty, setMaxDifficulty] = useState(settings.maxDifficulty);
 
   const skillScores = useMemo(() => getSkillScores(), [getSkillScores]);
+
+  const todaySessions = useMemo(() => {
+    const sessions = getTodaySessions();
+    return [...sessions].sort((a, b) => 
+      new Date(b.startTime).getTime() - new Date(a.startTime).getTime()
+    );
+  }, [getTodaySessions]);
+
+  const totalSessions = todaySessions.length;
+  const totalPracticeTime = todaySessions.reduce((sum, s) => sum + s.durationMinutes, 0);
+
+  const speedLabels: Record<PracticeSpeed, { text: string; color: string }> = {
+    normal: { text: '普通', color: 'bg-gray-100 text-gray-600' },
+    slow: { text: '慢速', color: 'bg-blue-100 text-blue-600' },
+    phrase: { text: '分句', color: 'bg-green-100 text-green-600' },
+  };
 
   const handleSave = () => {
     updateSettings({ dailyTimeLimit: timeLimit, maxDifficulty });
@@ -505,6 +522,74 @@ function SettingsPanel() {
           transition={{ delay: 0.2 }}
           className="bg-white/90 backdrop-blur rounded-card shadow-card p-5"
         >
+          <div className="flex items-center gap-2 mb-4">
+            <BarChart3 className="w-5 h-5 text-primary" />
+            <h2 className="font-display text-base font-bold text-gray-800">📝 今日练习明细</h2>
+          </div>
+
+          {todaySessions.length === 0 ? (
+            <p className="font-body text-sm text-gray-400 text-center py-6">
+              今天还没有练习记录，快去闯关吧！
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {todaySessions.map((session) => (
+                <div
+                  key={session.id}
+                  className="bg-cream rounded-xl p-3"
+                >
+                  <div className="flex items-start justify-between mb-2">
+                    <div>
+                      <p className="font-display text-sm font-bold text-gray-800">
+                        {session.levelName} · {session.areaName}
+                      </p>
+                      <div className="flex items-center gap-2 mt-1">
+                        <span className="px-2 py-0.5 rounded-full bg-primary/10 text-primary font-body text-xs font-semibold">
+                          {SKILL_LABELS[session.skillType]}
+                        </span>
+                        <span className={`px-2 py-0.5 rounded-full font-body text-xs font-semibold ${speedLabels[session.speed].color}`}>
+                          {speedLabels[session.speed].text}
+                        </span>
+                      </div>
+                    </div>
+                    <p className="font-body text-xs text-gray-500">
+                      {session.durationMinutes.toFixed(1)} 分钟
+                    </p>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    {session.passed ? (
+                      <span className="font-body text-xs font-semibold text-green-600">
+                        ✅ 通关 {session.stars}★
+                      </span>
+                    ) : (
+                      <span className="font-body text-xs font-semibold text-red-500">
+                        ❌ 未通过
+                      </span>
+                    )}
+                    <span className="font-body text-xs font-semibold text-gray-600">
+                      准确率 {(session.accuracy * 100).toFixed(0)}%
+                    </span>
+                  </div>
+                </div>
+              ))}
+              <div className="flex justify-between pt-2 border-t border-gray-100">
+                <span className="font-body text-xs text-gray-500">
+                  共 {totalSessions} 次练习
+                </span>
+                <span className="font-body text-xs font-semibold text-primary">
+                  总时长 {totalPracticeTime.toFixed(1)} 分钟
+                </span>
+              </div>
+            </div>
+          )}
+        </motion.section>
+
+        <motion.section
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.25 }}
+          className="bg-white/90 backdrop-blur rounded-card shadow-card p-5"
+        >
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Lock className="w-5 h-5 text-primary" />
@@ -522,7 +607,7 @@ function SettingsPanel() {
         <motion.button
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.25 }}
+          transition={{ delay: 0.3 }}
           whileTap={{ scale: 0.97 }}
           onClick={handleSave}
           className="w-full py-3.5 rounded-button bg-primary text-white font-display text-base font-bold shadow-game flex items-center justify-center gap-2"

@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowLeft, Play, RotateCcw, Scissors, Star, Volume2 } from 'lucide-react';
+import { ArrowLeft, Play, RotateCcw, Scissors, Star, Volume2, AlertTriangle, Target, Clock, Music, Award, TrendingUp, TrendingDown } from 'lucide-react';
 import { useGameStore } from '@/store/gameStore';
 import { getLevelById } from '@/data/gameData';
 import { AREAS } from '@/data/gameData';
-import type { Note } from '@/types';
+import type { Note, PracticeSpeed } from '@/types';
 
 type GamePhase = 'ready' | 'countdown' | 'playing' | 'ended';
 
@@ -57,13 +57,17 @@ export default function LevelPage() {
   const startLevelSession = useGameStore(s => s.startLevelSession);
   const endLevelSession = useGameStore(s => s.endLevelSession);
   const isDailyTimeExceeded = useGameStore(s => s.isDailyTimeExceeded);
+  const checkCanEnterLevel = useGameStore(s => s.checkCanEnterLevel);
+  const recordPracticeSession = useGameStore(s => s.recordPracticeSession);
 
   const levelId = Number(id);
   const level = getLevelById(levelId);
+  const area = level ? AREAS.find(a => a.id === level.areaId) : null;
 
   const [phase, setPhase] = useState<GamePhase>('ready');
   const [countdownNum, setCountdownNum] = useState(3);
   const [bpm, setBpm] = useState(level?.bpm ?? 60);
+  const [practiceSpeed, setPracticeSpeed] = useState<PracticeSpeed>('normal');
   const [currentNoteIndex, setCurrentNoteIndex] = useState(0);
   const [correctCount, setCorrectCount] = useState(0);
   const [wrongCount, setWrongCount] = useState(0);
@@ -76,12 +80,37 @@ export default function LevelPage() {
   const [shakeScreen, setShakeScreen] = useState(false);
   const [earnedStars, setEarnedStars] = useState(0);
   const [earnedCoins, setEarnedCoins] = useState(0);
+  const [rhythmDeviations, setRhythmDeviations] = useState<number[]>([]);
+  const [blockedMessage, setBlockedMessage] = useState<string | null>(null);
+  const [sessionStartTime] = useState(Date.now());
 
   const allNotesRef = useRef<Note[]>([]);
   const beatTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const currentNoteIndexRef = useRef(0);
   const hasPressedRef = useRef(false);
   const phaseRef = useRef<GamePhase>('ready');
+
+  useEffect(() => {
+    if (!level) return;
+
+    const checkResult = checkCanEnterLevel(levelId);
+    if (!checkResult.allowed) {
+      if (checkResult.reason === 'time') {
+        setBlockedMessage('今日游戏时间已达上限，休息一下明天再来吧！');
+      } else if (checkResult.reason === 'difficulty') {
+        setBlockedMessage('这个关卡难度较高，家长暂时还没解锁哦，先练习前面的关卡吧！');
+      } else {
+        setBlockedMessage('这个关卡还没有解锁，请先完成前面的关卡！');
+      }
+      const timer = setTimeout(() => navigate('/map'), 1500);
+      return () => clearTimeout(timer);
+    }
+
+    startLevelSession();
+    return () => {
+      endLevelSession();
+    };
+  }, [levelId, level, checkCanEnterLevel, startLevelSession, endLevelSession, navigate]);
 
   useEffect(() => {
     phaseRef.current = phase;
@@ -98,23 +127,6 @@ export default function LevelPage() {
     allNotesRef.current = notes;
   }, [level]);
 
-  useEffect(() => {
-    startLevelSession();
-    return () => {
-      endLevelSession();
-    };
-  }, [startLevelSession, endLevelSession]);
-
-  useEffect(() => {
-    if (isDailyTimeExceeded()) {
-      const timer = setTimeout(() => {
-        navigate('/map');
-      }, 100);
-      return () => clearTimeout(timer);
-    }
-  }, [isDailyTimeExceeded, navigate]);
-
-  const area = level ? AREAS.find(a => a.id === level.areaId) : null;
   const theme = area?.theme ?? 'forest';
   const obstacleIcon = OBSTACLE_MAP[theme] ?? '🌿';
 
@@ -138,12 +150,36 @@ export default function LevelPage() {
 
     const total = allNotesRef.current.length;
     const acc = total > 0 ? correctCount / total : 0;
+    const avgRhythmDeviation = rhythmDeviations.length > 0
+      ? rhythmDeviations.reduce((a, b) => a + b, 0) / rhythmDeviations.length
+      : 0;
 
     const result = completeLevel(levelId, acc);
 
     setEarnedStars(result.stars);
     setEarnedCoins(result.coins);
-  }, [correctCount, levelId, completeLevel, stopBeatTimer]);
+
+    const durationMinutes = Math.max(0.1, (Date.now() - sessionStartTime) / 60000);
+
+    if (level && area) {
+      recordPracticeSession({
+        levelId: level.id,
+        levelName: level.name,
+        areaId: area.id,
+        areaName: area.name,
+        skillType: level.skillType,
+        speed: practiceSpeed,
+        durationMinutes: Math.round(durationMinutes * 10) / 10,
+        accuracy: acc,
+        passed: result.passed,
+        stars: result.stars,
+        wrongNoteCount: wrongCount,
+        missedNoteCount: missedCount,
+        rhythmDeviationAvg: avgRhythmDeviation,
+        skillScore: acc * 100,
+      });
+    }
+  }, [correctCount, levelId, completeLevel, stopBeatTimer, rhythmDeviations, level, area, sessionStartTime, practiceSpeed, wrongCount, missedCount, recordPracticeSession]);
 
   const advanceNote = useCallback(() => {
     const currentIdx = currentNoteIndexRef.current;
@@ -216,18 +252,54 @@ export default function LevelPage() {
     };
   }, [startPlaying]);
 
-  const handleSlowRetry = useCallback(() => {
-    const slowBpm = Math.round((level?.bpm ?? 60) * 0.7);
+  const resetLevelState = useCallback(() => {
+    setCurrentNoteIndex(0);
+    currentNoteIndexRef.current = 0;
+    setCorrectCount(0);
+    setWrongCount(0);
+    setMissedCount(0);
+    setCharacterPos(0);
+    setIsWiggling(false);
+    setObstacleEmoji(null);
+    setFlashNotes({});
+    setBeatInMeasure(1);
+    setShakeScreen(false);
+    setRhythmDeviations([]);
+    hasPressedRef.current = false;
+  }, []);
+
+  const handleRetry = useCallback((speed: PracticeSpeed = 'normal') => {
+    setPracticeSpeed(speed);
+    resetLevelState();
+    setEarnedStars(0);
+    setEarnedCoins(0);
     handleCountdown();
-    setTimeout(() => {
-      stopBeatTimer();
-      startPlaying(slowBpm);
-    }, 2400);
-  }, [level, handleCountdown, startPlaying, stopBeatTimer]);
+
+    if (speed === 'slow') {
+      const slowBpm = Math.round((level?.bpm ?? 60) * 0.7);
+      setTimeout(() => {
+        stopBeatTimer();
+        startPlaying(slowBpm);
+      }, 2400);
+    } else {
+      setTimeout(() => {
+        stopBeatTimer();
+        startPlaying(level?.bpm ?? 60);
+      }, 2400);
+    }
+  }, [level, handleCountdown, startPlaying, stopBeatTimer, resetLevelState]);
+
+  const handleSlowRetry = useCallback(() => {
+    handleRetry('slow');
+  }, [handleRetry]);
 
   const handlePhraseRetry = useCallback(() => {
-    handleCountdown();
-  }, [handleCountdown]);
+    handleRetry('phrase');
+  }, [handleRetry]);
+
+  const handleNormalRetry = useCallback(() => {
+    handleRetry('normal');
+  }, [handleRetry]);
 
   useEffect(() => {
     return () => {
@@ -252,6 +324,12 @@ export default function LevelPage() {
     hasPressedRef.current = true;
 
     const expected = notes[currentIdx];
+    const beatDiff = beatInMeasure - expected.beatPosition;
+    const absBeatDiff = Math.abs(beatDiff);
+    if (absBeatDiff > 0.2) {
+      setRhythmDeviations(prev => [...prev, absBeatDiff]);
+    }
+
     if (pressedNote === expected.pitch) {
       setCorrectCount(c => c + 1);
       setCharacterPos(p => Math.min(p + 1, totalNotes));
@@ -658,9 +736,52 @@ export default function LevelPage() {
               <div className="text-sm text-gray-600 mb-1">
                 正确率: {Math.round(accuracy * 100)}%
               </div>
-              <div className="text-sm text-gray-600 mb-1">
-                ✅ {correctCount} · ❌ {wrongCount} · ⏭️ {missedCount}
+
+              <div className="bg-gray-50 rounded-2xl p-4 my-3 text-left">
+                <h3 className="font-bold text-gray-700 mb-2 text-sm flex items-center gap-1">
+                  <Target size={14} />
+                  练习分析
+                </h3>
+                <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                  <div className="bg-green-50 rounded-xl p-2">
+                    <div className="text-green-600 font-bold text-lg">{correctCount}</div>
+                    <div className="text-green-600 text-[10px]">✅ 正确</div>
+                  </div>
+                  <div className="bg-red-50 rounded-xl p-2">
+                    <div className="text-red-500 font-bold text-lg">{wrongCount}</div>
+                    <div className="text-red-500 text-[10px]">❌ 错音</div>
+                  </div>
+                  <div className="bg-orange-50 rounded-xl p-2">
+                    <div className="text-orange-500 font-bold text-lg">{missedCount}</div>
+                    <div className="text-orange-500 text-[10px]">⏭️ 漏按</div>
+                  </div>
+                </div>
+                <div className="mt-2 bg-blue-50 rounded-xl p-2 text-center">
+                  <div className="text-blue-600 font-bold text-sm">
+                    节拍偏差: {rhythmDeviations.length > 0 ? (rhythmDeviations.reduce((a, b) => a + b, 0) / rhythmDeviations.length).toFixed(2) : '0.00'} 拍
+                  </div>
+                  <div className="text-blue-600 text-[10px]">⏱️ 平均误差</div>
+                </div>
               </div>
+
+              {correctCount < totalNotes * 0.7 && (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-3">
+                  <p className="text-xs text-amber-700 font-semibold flex items-start gap-1">
+                    <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+                    <span>
+                      {wrongCount > missedCount
+                        ? '下次要注意看准音高哦！'
+                        : missedCount > wrongCount
+                          ? '试试跟着节拍器打拍，不要漏音！'
+                          : rhythmDeviations.length > 0 && rhythmDeviations.reduce((a, b) => a + b, 0) / rhythmDeviations.length > 0.5
+                            ? '节拍不太稳，先慢一点练速度！'
+                            : '多练习几次就能越来越好！'
+                      }
+                    </span>
+                  </p>
+                </div>
+              )}
+
               <div className="text-sm text-amber-600 font-bold mb-4">
                 🪙 +{earnedCoins}
               </div>
@@ -674,7 +795,7 @@ export default function LevelPage() {
                   </button>
                 )}
                 <button
-                  onClick={handlePhraseRetry}
+                  onClick={handleNormalRetry}
                   className="px-6 py-2.5 bg-orange-400 hover:bg-orange-500 text-white rounded-full font-bold flex items-center justify-center gap-2 transition-colors"
                 >
                   <RotateCcw size={16} />

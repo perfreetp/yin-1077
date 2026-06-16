@@ -7,9 +7,13 @@ import {
   WeeklyReport,
   SkillScore,
   SkillType,
+  PracticeSession,
+  PracticeSpeed,
+  FailedLevelRecord,
+  SkillTrendPoint,
 } from '@/types';
-import { ALL_RHYTHM_PATTERNS, ALL_KEY_SIGNATURES } from '@/types';
-import { AREAS, LEVELS, ITEMS } from '@/data/gameData';
+import { ALL_RHYTHM_PATTERNS, ALL_KEY_SIGNATURES, SKILL_LABELS } from '@/types';
+import { AREAS, LEVELS, ITEMS, getLevelById, getAreaById } from '@/data/gameData';
 
 const STORAGE_KEYS = {
   player: 'sightread_player',
@@ -18,6 +22,9 @@ const STORAGE_KEYS = {
   settings: 'sightread_settings',
   weeklyReport: 'sightread_weekly_report',
   dailyTime: 'sightread_daily_time',
+  practiceLog: 'sightread_practice_log',
+  skillTrend: 'sightread_skill_trend',
+  failedLevels: 'sightread_failed_levels',
 };
 
 function loadFromStorage<T>(key: string, fallback: T): T {
@@ -125,6 +132,11 @@ interface GameStore {
   getSkillScores: () => SkillScore;
   startLevelSession: () => void;
   endLevelSession: () => void;
+  recordPracticeSession: (session: Omit<PracticeSession, 'id' | 'startTime' | 'endTime'>) => void;
+  getTodaySessions: () => PracticeSession[];
+  getSkillTrends: () => Record<SkillType, SkillTrendPoint[]>;
+  getFailedLevels: () => FailedLevelRecord[];
+  checkCanEnterLevel: (levelId: number) => { allowed: boolean; reason?: 'time' | 'difficulty' | 'locked' };
 }
 
 function migrateReport(report: WeeklyReport): WeeklyReport {
@@ -410,7 +422,9 @@ export const useGameStore = create<GameStore>((set, get) => {
   },
 
   startLevelSession: () => {
-    set({ levelSessionStartTime: Date.now() });
+    if (!get().isDailyTimeExceeded()) {
+      set({ levelSessionStartTime: Date.now() });
+    }
   },
 
   endLevelSession: () => {
@@ -422,6 +436,101 @@ export const useGameStore = create<GameStore>((set, get) => {
       get().addPlayTime(roundedMinutes);
     }
     set({ levelSessionStartTime: null });
+  },
+
+  checkCanEnterLevel: (levelId) => {
+    const { isLevelUnlocked, settings, isDailyTimeExceeded } = get();
+    const level = getLevelById(levelId);
+
+    if (!isLevelUnlocked(levelId)) {
+      return { allowed: false, reason: 'locked' as const };
+    }
+
+    if (isDailyTimeExceeded()) {
+      return { allowed: false, reason: 'time' as const };
+    }
+
+    if (level) {
+      const diffMap: Record<string, number> = { easy: 1, medium: 2, hard: 3 };
+      const diffLevel = diffMap[level.difficulty] ?? 1;
+      if (diffLevel > settings.maxDifficulty) {
+        return { allowed: false, reason: 'difficulty' as const };
+      }
+    }
+
+    return { allowed: true };
+  },
+
+  recordPracticeSession: (sessionData) => {
+    const today = new Date().toDateString();
+    const fullSession: PracticeSession = {
+      ...sessionData,
+      id: `${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+      startTime: new Date().toISOString(),
+      endTime: new Date().toISOString(),
+    };
+
+    const log = loadFromStorage<Record<string, PracticeSession[]>>(STORAGE_KEYS.practiceLog, {});
+    if (!log[today]) log[today] = [];
+    log[today].push(fullSession);
+    saveToStorage(STORAGE_KEYS.practiceLog, log);
+
+    const trend = loadFromStorage<Record<string, SkillTrendPoint[]>>(STORAGE_KEYS.skillTrend, {});
+    const skillKey = sessionData.skillType;
+    if (!trend[skillKey]) trend[skillKey] = [];
+    const dateStr = new Date().toISOString().split('T')[0];
+    const lastPoint = trend[skillKey][trend[skillKey].length - 1];
+    if (lastPoint?.date === dateStr) {
+      lastPoint.score = (lastPoint.score + sessionData.skillScore) / 2;
+    } else {
+      trend[skillKey].push({ date: dateStr, score: sessionData.skillScore });
+    }
+    if (trend[skillKey].length > 7) trend[skillKey].shift();
+    saveToStorage(STORAGE_KEYS.skillTrend, trend);
+
+    if (!sessionData.passed) {
+      const failed = loadFromStorage<Record<number, FailedLevelRecord>>(STORAGE_KEYS.failedLevels, {});
+      const levelKey = sessionData.levelId;
+      if (!failed[levelKey]) {
+        failed[levelKey] = {
+          levelId: sessionData.levelId,
+          levelName: sessionData.levelName,
+          areaId: sessionData.areaId,
+          areaName: sessionData.areaName,
+          failCount: 0,
+          lastAttempt: new Date().toISOString(),
+          avgAccuracy: 0,
+        };
+      }
+      failed[levelKey].failCount += 1;
+      failed[levelKey].lastAttempt = new Date().toISOString();
+      failed[levelKey].avgAccuracy =
+        (failed[levelKey].avgAccuracy * (failed[levelKey].failCount - 1) + sessionData.accuracy) /
+        failed[levelKey].failCount;
+      saveToStorage(STORAGE_KEYS.failedLevels, failed);
+    }
+  },
+
+  getTodaySessions: () => {
+    const today = new Date().toDateString();
+    const log = loadFromStorage<Record<string, PracticeSession[]>>(STORAGE_KEYS.practiceLog, {});
+    return log[today] ?? [];
+  },
+
+  getSkillTrends: () => {
+    const defaultTrends: Record<SkillType, SkillTrendPoint[]> = {
+      steady_beat: [],
+      sight_read: [],
+      interval_jump: [],
+      hand_switch: [],
+      continuous: [],
+    };
+    return loadFromStorage<Record<SkillType, SkillTrendPoint[]>>(STORAGE_KEYS.skillTrend, defaultTrends);
+  },
+
+  getFailedLevels: () => {
+    const failed = loadFromStorage<Record<number, FailedLevelRecord>>(STORAGE_KEYS.failedLevels, {});
+    return Object.values(failed).sort((a, b) => b.failCount - a.failCount);
   },
 
   getLevelProgress: (levelId) => get().progress.find(p => p.levelId === levelId),

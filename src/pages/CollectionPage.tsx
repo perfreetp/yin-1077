@@ -1,12 +1,13 @@
 import { useState, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { BookOpen, Target, TrendingUp, AlertCircle, CheckCircle } from 'lucide-react';
+import { BookOpen, Target, TrendingUp, TrendingDown, AlertCircle, ArrowRight, CheckCircle } from 'lucide-react';
 import { useGameStore } from '@/store/gameStore';
 import { SKILL_LABELS, SKILL_DESCRIPTIONS, ALL_RHYTHM_PATTERNS, ALL_KEY_SIGNATURES } from '@/types';
-import type { SkillType } from '@/types';
+import type { SkillType, SkillTrendPoint, FailedLevelRecord } from '@/types';
 import { AREAS } from '@/data/gameData';
 
-type TabType = 'skills' | 'ability';
+type TabType = 'skills' | 'ability' | 'trends';
 
 const SKILL_ICONS: Record<SkillType, string> = {
   steady_beat: '🥁',
@@ -14,6 +15,14 @@ const SKILL_ICONS: Record<SkillType, string> = {
   interval_jump: '🦘',
   hand_switch: '🤝',
   continuous: '🎯',
+};
+
+const SKILL_COLORS: Record<SkillType, string> = {
+  steady_beat: '#4CAF50',
+  sight_read: '#64B5F6',
+  interval_jump: '#AB47BC',
+  hand_switch: '#FF8C42',
+  continuous: '#F44336',
 };
 
 const SKILL_ORDER: SkillType[] = [
@@ -24,9 +33,10 @@ const SKILL_ORDER: SkillType[] = [
   'continuous',
 ];
 
-const TAB_CONFIG: { key: TabType; label: string; icon: typeof BookOpen }[] = [
+const TAB_CONFIG: { key: TabType; label: string; icon: typeof BookOpen | null; emoji?: string }[] = [
   { key: 'skills', label: '技能图谱', icon: BookOpen },
   { key: 'ability', label: '能力地图', icon: Target },
+  { key: 'trends', label: '练习趋势', icon: null, emoji: '📈' },
 ];
 
 function getProgressColor(pct: number): string {
@@ -39,6 +49,161 @@ function getBarBgColor(pct: number): string {
   if (pct >= 80) return 'bg-green-100';
   if (pct >= 50) return 'bg-yellow-100';
   return 'bg-red-100';
+}
+
+function calculateTrend(points: SkillTrendPoint[]): 'improving' | 'stable' | 'declining' {
+  if (points.length < 6) return 'stable';
+  const firstThree = points.slice(0, 3);
+  const lastThree = points.slice(-3);
+  const avgFirst = firstThree.reduce((sum, p) => sum + p.score, 0) / 3;
+  const avgLast = lastThree.reduce((sum, p) => sum + p.score, 0) / 3;
+  const diff = avgLast - avgFirst;
+  if (diff > 2) return 'improving';
+  if (diff < -2) return 'declining';
+  return 'stable';
+}
+
+function LineChart({ trends }: { trends: Record<SkillType, SkillTrendPoint[]> }) {
+  const width = 340;
+  const height = 200;
+  const padding = { top: 20, right: 20, bottom: 30, left: 40 };
+  const chartWidth = width - padding.left - padding.right;
+  const chartHeight = height - padding.top - padding.bottom;
+
+  const allScores = SKILL_ORDER.flatMap(skill => trends[skill]?.map(p => p.score) || []);
+  const maxScore = Math.max(100, ...allScores, 0);
+  const minScore = Math.min(0, ...allScores, 0);
+  const scoreRange = maxScore - minScore || 100;
+
+  const dayLabels = ['一', '二', '三', '四', '五', '六', '日'];
+
+  const getX = (index: number, total: number) => {
+    return padding.left + (index / Math.max(total - 1, 1)) * chartWidth;
+  };
+
+  const getY = (score: number) => {
+    return padding.top + chartHeight - ((score - minScore) / scoreRange) * chartHeight;
+  };
+
+  return (
+    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} className="mx-auto">
+      {[0, 0.25, 0.5, 0.75, 1].map((ratio, i) => {
+        const y = padding.top + chartHeight * ratio;
+        const value = Math.round(maxScore - scoreRange * ratio);
+        return (
+          <g key={i}>
+            <line
+              x1={padding.left}
+              y1={y}
+              x2={width - padding.right}
+              y2={y}
+              stroke="#e5e7eb"
+              strokeWidth={1}
+              strokeDasharray={i === 0 || i === 4 ? '0' : '4,4'}
+            />
+            <text
+              x={padding.left - 8}
+              y={y + 4}
+              textAnchor="end"
+              className="text-xs fill-gray-400 font-body"
+              fontSize={10}
+            >
+              {value}
+            </text>
+          </g>
+        );
+      })}
+
+      {[0, 1, 2, 3, 4, 5, 6].map((i) => {
+        const x = getX(i, 7);
+        return (
+          <text
+            key={i}
+            x={x}
+            y={height - padding.bottom + 18}
+            textAnchor="middle"
+            className="text-xs fill-gray-400 font-body"
+            fontSize={11}
+          >
+            {dayLabels[i]}
+          </text>
+        );
+      })}
+
+      {SKILL_ORDER.map((skill, si) => {
+        const points = trends[skill] || [];
+        if (points.length === 0) return null;
+        
+        const pathPoints = points.map((p, i) => `${getX(i, 7)},${getY(p.score)}`).join(' ');
+        
+        return (
+          <g key={skill}>
+            <polyline
+              points={pathPoints}
+              fill="none"
+              stroke={SKILL_COLORS[skill]}
+              strokeWidth={2.5}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            {points.map((p, pi) => (
+              <circle
+                key={pi}
+                cx={getX(pi, 7)}
+                cy={getY(p.score)}
+                r={3.5}
+                fill={SKILL_COLORS[skill]}
+                stroke="white"
+                strokeWidth={1.5}
+              />
+            ))}
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+function FailedLevelCard({ level, onRetry }: { level: FailedLevelRecord; onRetry: () => void }) {
+  const accuracy = Math.round(level.avgAccuracy * 100);
+  
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      whileHover={{ scale: 1.02 }}
+      className="rounded-xl border-2 border-red-200 bg-red-50 p-3"
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex-1 min-w-0">
+          <h4 className="font-display text-sm font-bold text-gray-800 truncate">
+            {level.levelName}
+          </h4>
+          <p className="font-body text-xs text-gray-500 truncate">
+            {level.areaName}
+          </p>
+        </div>
+        <span className="flex-shrink-0 rounded-full bg-red-100 px-2 py-0.5 font-body text-xs font-bold text-red-600">
+          失败 {level.failCount} 次
+        </span>
+      </div>
+      
+      <div className="mt-2 flex items-center justify-between">
+        <div className="flex items-center gap-1">
+          <span className="font-body text-xs text-gray-500">平均准确率</span>
+          <span className="font-display text-sm font-bold text-gray-700">{accuracy}%</span>
+        </div>
+        <button
+          onClick={onRetry}
+          className="flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 font-display text-xs font-bold text-white shadow-sm hover:bg-primary/90 transition-colors"
+        >
+          <span>👉</span>
+          再练一次
+          <ArrowRight className="h-3 w-3" />
+        </button>
+      </div>
+    </motion.div>
+  );
 }
 
 function RadarChart({ scores, strongest, weakest }: { scores: Record<SkillType, number>; strongest: SkillType; weakest: SkillType }) {
@@ -227,18 +392,30 @@ function SkillCard({ skill, score }: { skill: SkillType; score: number }) {
 }
 
 export default function CollectionPage() {
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<TabType>('skills');
   const getSkillScores = useGameStore(s => s.getSkillScores);
   const weeklyReport = useGameStore(s => s.weeklyReport);
   const getAreaProgress = useGameStore(s => s.getAreaProgress);
+  const getSkillTrends = useGameStore(s => s.getSkillTrends);
+  const getFailedLevels = useGameStore(s => s.getFailedLevels);
 
   const scores = getSkillScores();
   const { strongestSkill, weakestSkill, totalPracticeTime, levelsCompleted } = weeklyReport;
+  const trends = getSkillTrends();
+  const failedLevels = getFailedLevels();
 
   const areaStats = useMemo(
     () => AREAS.map(area => ({ ...area, progress: getAreaProgress(area.id) })),
     [getAreaProgress],
   );
+
+  const skillTrends = useMemo(() => {
+    return SKILL_ORDER.map(skill => ({
+      skill,
+      trend: calculateTrend(trends[skill] || []),
+    }));
+  }, [trends]);
 
   return (
     <div className="min-h-screen bg-cream-50">
@@ -266,7 +443,11 @@ export default function CollectionPage() {
                     : 'text-gray-500 hover:text-primary'
                 }`}
               >
-                <Icon className="h-4 w-4" />
+                {tab.emoji ? (
+                  <span className="text-base">{tab.emoji}</span>
+                ) : (
+                  Icon && <Icon className="h-4 w-4" />
+                )}
                 {tab.label}
               </button>
             );
@@ -353,7 +534,7 @@ export default function CollectionPage() {
                 </p>
               </motion.div>
             </motion.div>
-          ) : (
+          ) : activeTab === 'ability' ? (
             <motion.div
               key="ability"
               initial={{ opacity: 0, x: 20 }}
@@ -489,6 +670,95 @@ export default function CollectionPage() {
                     );
                   })}
                 </div>
+              </motion.div>
+            </motion.div>
+          ) : (
+            <motion.div
+              key="trends"
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              transition={{ duration: 0.25 }}
+              className="mt-5"
+            >
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ duration: 0.4 }}
+                className="rounded-2xl border-2 border-cream-300 bg-white p-4 shadow-card"
+              >
+                <h2 className="mb-3 text-center font-display text-base font-bold text-primary">
+                  📈 7天技能趋势
+                </h2>
+                <LineChart trends={trends} />
+                
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  {skillTrends.map(({ skill, trend }, i) => (
+                    <motion.div
+                      key={skill}
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: 0.1 * i }}
+                      className="flex items-center gap-2 rounded-lg bg-cream-50 px-3 py-2"
+                    >
+                      <div
+                        className="h-3 w-3 rounded-full"
+                        style={{ backgroundColor: SKILL_COLORS[skill] }}
+                      />
+                      <span className="font-body text-xs font-medium text-gray-700 flex-1">
+                        {SKILL_ICONS[skill]} {SKILL_LABELS[skill]}
+                      </span>
+                      {trend === 'improving' && (
+                        <span className="flex items-center gap-0.5 text-green-500">
+                          <TrendingUp className="h-3.5 w-3.5" />
+                          <span className="text-xs font-bold">上升</span>
+                        </span>
+                      )}
+                      {trend === 'stable' && (
+                        <span className="flex items-center gap-0.5 text-gray-500">
+                          <span className="text-sm">➡️</span>
+                          <span className="text-xs font-bold">平稳</span>
+                        </span>
+                      )}
+                      {trend === 'declining' && (
+                        <span className="flex items-center gap-0.5 text-red-500">
+                          <TrendingDown className="h-3.5 w-3.5" />
+                          <span className="text-xs font-bold">下降</span>
+                        </span>
+                      )}
+                    </motion.div>
+                  ))}
+                </div>
+              </motion.div>
+
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.3 }}
+                className="mt-4 rounded-2xl border-2 border-red-200 bg-white p-4 shadow-card"
+              >
+                <h2 className="mb-3 flex items-center gap-2 font-display text-base font-bold text-red-500">
+                  <AlertCircle className="h-5 w-5" />
+                  ⚠️ 需要重点练习
+                </h2>
+                {failedLevels.length === 0 ? (
+                  <div className="py-8 text-center">
+                    <span className="text-4xl">🎉</span>
+                    <p className="mt-2 font-body text-sm text-gray-500">
+                      太棒了！没有需要重点练习的关卡
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {failedLevels.map(level => (
+                      <FailedLevelCard
+                        key={level.levelId}
+                        level={level}
+                        onRetry={() => navigate(`/level/${level.levelId}`)}
+                      />
+                    ))}
+                  </div>
+                )}
               </motion.div>
             </motion.div>
           )}
