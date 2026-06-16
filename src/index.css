@@ -1,0 +1,72 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: 'Nunito', sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: linear-gradient(135deg, #FFF8E7 0%, #F5EDDA 50%, #FFF0D4 100%);
+  min-height: 100vh;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  overflow-x: hidden;
+}
+
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+@layer components {
+  .btn-game {
+    @apply font-display font-bold rounded-button px-6 py-3 text-white 
+           shadow-game active:shadow-game-hover active:translate-y-1 
+           transition-all duration-150 select-none
+           min-h-[48px] min-w-[48px];
+  }
+  
+  .btn-game-primary {
+    @apply btn-game bg-gradient-to-b from-primary to-primary-dark 
+           hover:from-primary-light hover:to-primary;
+  }
+  
+  .btn-game-forest {
+    @apply btn-game bg-gradient-to-b from-forest to-forest-dark 
+           hover:from-forest-light hover:to-forest;
+  }
+  
+  .btn-game-sky {
+    @apply btn-game bg-gradient-to-b from-sky to-sky-dark 
+           hover:from-sky-light hover:to-sky;
+  }
+  
+  .btn-game-gold {
+    @apply btn-game bg-gradient-to-b from-gold-dark to-gold 
+           hover:from-gold to-gold-light text-amber-900;
+  }
+
+  .card-game {
+    @apply bg-white/90 backdrop-blur-sm rounded-card shadow-card 
+           p-4 transition-all duration-200 hover:shadow-card-hover;
+  }
+
+  .nav-item {
+    @apply flex flex-col items-center gap-1 px-3 py-2 rounded-xl 
+           transition-all duration-200 select-none min-w-[64px];
+  }
+
+  .nav-item-active {
+    @apply nav-item bg-primary/15 text-primary scale-105;
+  }
+
+  .nav-item-inactive {
+    @apply nav-item text-gray-400 hover:text-gray-600;
+  }
+}
