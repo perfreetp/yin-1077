@@ -63,7 +63,7 @@ function calculateTrend(points: SkillTrendPoint[]): 'improving' | 'stable' | 'de
   return 'stable';
 }
 
-function LineChart({ trends }: { trends: Record<SkillType, SkillTrendPoint[]> }) {
+function LineChart({ trends, beatTrend }: { trends: Record<SkillType, SkillTrendPoint[]>; beatTrend: SkillTrendPoint[] }) {
   const width = 340;
   const height = 200;
   const padding = { top: 20, right: 20, bottom: 30, left: 40 };
@@ -71,8 +71,9 @@ function LineChart({ trends }: { trends: Record<SkillType, SkillTrendPoint[]> })
   const chartHeight = height - padding.top - padding.bottom;
 
   const allScores = SKILL_ORDER.flatMap(skill => trends[skill]?.map(p => p.score) || []);
-  const maxScore = Math.max(100, ...allScores, 0);
-  const minScore = Math.min(0, ...allScores, 0);
+  const beatScores = beatTrend.map(p => p.score);
+  const maxScore = Math.max(100, ...allScores, ...beatScores, 0);
+  const minScore = Math.min(0, ...allScores, ...beatScores, 0);
   const scoreRange = maxScore - minScore || 100;
 
   const dayLabels = ['一', '二', '三', '四', '五', '六', '日'];
@@ -160,6 +161,31 @@ function LineChart({ trends }: { trends: Record<SkillType, SkillTrendPoint[]> })
           </g>
         );
       })}
+
+      {beatTrend.length > 0 && (
+        <g>
+          <polyline
+            points={beatTrend.map((p, i) => `${getX(i, 7)},${getY(p.score)}`).join(' ')}
+            fill="none"
+            stroke="#FFB300"
+            strokeWidth={3}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeDasharray="6,3"
+          />
+          {beatTrend.map((p, pi) => (
+            <circle
+              key={pi}
+              cx={getX(pi, 7)}
+              cy={getY(p.score)}
+              r={4}
+              fill="#FFB300"
+              stroke="white"
+              strokeWidth={1.5}
+            />
+          ))}
+        </g>
+      )}
     </svg>
   );
 }
@@ -399,11 +425,15 @@ export default function CollectionPage() {
   const getAreaProgress = useGameStore(s => s.getAreaProgress);
   const getSkillTrends = useGameStore(s => s.getSkillTrends);
   const getFailedLevels = useGameStore(s => s.getFailedLevels);
+  const getBeatStabilityTrend = useGameStore(s => s.getBeatStabilityTrend);
+  const getTodaySessions = useGameStore(s => s.getTodaySessions);
 
   const scores = getSkillScores();
   const { strongestSkill, weakestSkill, totalPracticeTime, levelsCompleted } = weeklyReport;
   const trends = getSkillTrends();
   const failedLevels = getFailedLevels();
+  const beatTrend = getBeatStabilityTrend();
+  const todaySessions = getTodaySessions();
 
   const areaStats = useMemo(
     () => AREAS.map(area => ({ ...area, progress: getAreaProgress(area.id) })),
@@ -416,6 +446,16 @@ export default function CollectionPage() {
       trend: calculateTrend(trends[skill] || []),
     }));
   }, [trends]);
+
+  const beatTrendInfo = useMemo(() => {
+    const trend = calculateTrend(beatTrend);
+    const totalEarly = todaySessions.reduce((sum, s) => sum + (s.rhythmEarlyCount || 0), 0);
+    const totalLate = todaySessions.reduce((sum, s) => sum + (s.rhythmLateCount || 0), 0);
+    let tendency: 'early' | 'late' | 'even' = 'even';
+    if (totalEarly > totalLate && totalEarly - totalLate >= 3) tendency = 'early';
+    else if (totalLate > totalEarly && totalLate - totalEarly >= 3) tendency = 'late';
+    return { trend, totalEarly, totalLate, tendency, hasSessions: todaySessions.length > 0 };
+  }, [beatTrend, todaySessions]);
 
   return (
     <div className="min-h-screen bg-cream-50">
@@ -690,7 +730,7 @@ export default function CollectionPage() {
                 <h2 className="mb-3 text-center font-display text-base font-bold text-primary">
                   📈 7天技能趋势
                 </h2>
-                <LineChart trends={trends} />
+                <LineChart trends={trends} beatTrend={beatTrend} />
                 
                 <div className="mt-3 grid grid-cols-2 gap-2">
                   {skillTrends.map(({ skill, trend }, i) => (
@@ -728,7 +768,108 @@ export default function CollectionPage() {
                       )}
                     </motion.div>
                   ))}
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.5 }}
+                    className="flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 border border-amber-200"
+                  >
+                    <div
+                      className="h-3 w-3 rounded-full"
+                      style={{ backgroundColor: '#FFB300' }}
+                    />
+                    <span className="font-body text-xs font-medium text-gray-700 flex-1">
+                      🎯 节拍稳定性
+                    </span>
+                    {beatTrendInfo.trend === 'improving' && (
+                      <span className="flex items-center gap-0.5 text-green-500">
+                        <TrendingUp className="h-3.5 w-3.5" />
+                        <span className="text-xs font-bold">📈</span>
+                      </span>
+                    )}
+                    {beatTrendInfo.trend === 'stable' && (
+                      <span className="flex items-center gap-0.5 text-gray-500">
+                        <span className="text-sm">➡️</span>
+                        <span className="text-xs font-bold">➡️</span>
+                      </span>
+                    )}
+                    {beatTrendInfo.trend === 'declining' && (
+                      <span className="flex items-center gap-0.5 text-red-500">
+                        <TrendingDown className="h-3.5 w-3.5" />
+                        <span className="text-xs font-bold">📉</span>
+                      </span>
+                    )}
+                  </motion.div>
                 </div>
+              </motion.div>
+
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.4 }}
+                className="mt-4 rounded-2xl border-2 bg-white p-4 shadow-card"
+                style={{
+                  borderColor: beatTrendInfo.tendency === 'early'
+                    ? '#E9D5FF'
+                    : beatTrendInfo.tendency === 'late'
+                    ? '#FDE68A'
+                    : '#BBF7D0',
+                }}
+              >
+                <h2 className="mb-3 flex items-center gap-2 font-display text-base font-bold" style={{
+                  color: beatTrendInfo.tendency === 'early'
+                    ? '#7E22CE'
+                    : beatTrendInfo.tendency === 'late'
+                    ? '#B45309'
+                    : '#15803D',
+                }}>
+                  <span>🎵</span>
+                  节拍分析
+                </h2>
+                {beatTrendInfo.hasSessions ? (
+                  <div className="space-y-3">
+                    <div
+                      className="rounded-xl px-4 py-3 text-center font-display text-lg font-bold"
+                      style={{
+                        backgroundColor: beatTrendInfo.tendency === 'early'
+                          ? '#F5F3FF'
+                          : beatTrendInfo.tendency === 'late'
+                          ? '#FFFBEB'
+                          : '#F0FDF4',
+                        color: beatTrendInfo.tendency === 'early'
+                          ? '#7E22CE'
+                          : beatTrendInfo.tendency === 'late'
+                          ? '#B45309'
+                          : '#15803D',
+                      }}
+                    >
+                      {beatTrendInfo.tendency === 'early' && '倾向偏早 ⚡'}
+                      {beatTrendInfo.tendency === 'late' && '倾向偏晚 🐢'}
+                      {beatTrendInfo.tendency === 'even' && '节拍均匀 ✨'}
+                    </div>
+                    <div className="flex items-center justify-center gap-4 font-body text-sm">
+                      <span className="flex items-center gap-1.5" style={{ color: '#7E22CE' }}>
+                        <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: '#A855F7' }} />
+                        偏早 <span className="font-bold">{beatTrendInfo.totalEarly}</span> 次
+                      </span>
+                      <span className="text-gray-300">/</span>
+                      <span className="flex items-center gap-1.5" style={{ color: '#B45309' }}>
+                        <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: '#F59E0B' }} />
+                        偏晚 <span className="font-bold">{beatTrendInfo.totalLate}</span> 次
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="py-6 text-center">
+                    <span className="text-3xl">🎹</span>
+                    <p className="mt-2 font-body text-sm text-gray-500">
+                      今日还没有练习记录哦～
+                    </p>
+                    <p className="font-body text-xs text-gray-400 mt-1">
+                      完成练习后会显示节拍分析
+                    </p>
+                  </div>
+                )}
               </motion.div>
 
               <motion.div

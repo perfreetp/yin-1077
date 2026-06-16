@@ -105,6 +105,7 @@ export interface WeeklyReport {
 }
 
 export type PracticeSpeed = 'normal' | 'slow' | 'phrase';
+export type FocusType = 'pitch' | 'rhythm' | 'completeness';
 
 export interface PracticeSession {
   id: string;
@@ -123,12 +124,24 @@ export interface PracticeSession {
   wrongNoteCount: number;
   missedNoteCount: number;
   rhythmDeviationAvg: number;
+  rhythmEarlyCount: number;
+  rhythmLateCount: number;
   skillScore: number;
+  practiceFocus?: FocusType;
 }
 
 export interface DailyPracticeLog {
   date: string;
   sessions: PracticeSession[];
+}
+
+export interface DailySummary {
+  date: string;
+  totalMinutes: number;
+  sessionCount: number;
+  passedCount: number;
+  weakestSkill: SkillType;
+  focusStats: Record<FocusType, number>;
 }
 
 export interface SkillTrendPoint {
@@ -151,6 +164,34 @@ export interface FailedLevelRecord {
   lastAttempt: string;
   avgAccuracy: number;
 }
+
+export interface LastSessionResult {
+  accuracy: number;
+  wrongNoteCount: number;
+  missedNoteCount: number;
+  rhythmDeviationAvg: number;
+  rhythmEarlyCount: number;
+  rhythmLateCount: number;
+  suggestedFocus: FocusType;
+}
+
+export const FOCUS_LABELS: Record<FocusType, string> = {
+  pitch: '音高准确',
+  rhythm: '节拍稳定',
+  completeness: '不漏音',
+};
+
+export const FOCUS_ICONS: Record<FocusType, string> = {
+  pitch: '🎯',
+  rhythm: '🎵',
+  completeness: '✅',
+};
+
+export const FOCUS_TIPS: Record<FocusType, string> = {
+  pitch: '先看清五线谱上的音高位置再按键',
+  rhythm: '在心里默数节拍，或跟着节拍器打拍',
+  completeness: '不要跳过任何音符，哪怕慢一点也没关系',
+};
 
 export const ALL_RHYTHM_PATTERNS = [
   '四分音符', '二分音符', '全音符', '八分音符',

@@ -11,8 +11,11 @@ import {
   PracticeSpeed,
   FailedLevelRecord,
   SkillTrendPoint,
+  FocusType,
+  DailySummary,
+  LastSessionResult,
 } from '@/types';
-import { ALL_RHYTHM_PATTERNS, ALL_KEY_SIGNATURES, SKILL_LABELS } from '@/types';
+import { ALL_RHYTHM_PATTERNS, ALL_KEY_SIGNATURES, SKILL_LABELS, FOCUS_LABELS } from '@/types';
 import { AREAS, LEVELS, ITEMS, getLevelById, getAreaById } from '@/data/gameData';
 
 const STORAGE_KEYS = {
@@ -25,6 +28,8 @@ const STORAGE_KEYS = {
   practiceLog: 'sightread_practice_log',
   skillTrend: 'sightread_skill_trend',
   failedLevels: 'sightread_failed_levels',
+  lastSessionResult: 'sightread_last_session',
+  beatStabilityTrend: 'sightread_beat_trend',
 };
 
 function loadFromStorage<T>(key: string, fallback: T): T {
@@ -130,13 +135,20 @@ interface GameStore {
   isLevelUnlocked: (levelId: number) => boolean;
   getAreaProgress: (areaId: number) => { completed: number; total: number; stars: number };
   getSkillScores: () => SkillScore;
-  startLevelSession: () => void;
-  endLevelSession: () => void;
+  startLevelSession: () => number | null;
+  endLevelSession: () => number;
   recordPracticeSession: (session: Omit<PracticeSession, 'id' | 'startTime' | 'endTime'>) => void;
   getTodaySessions: () => PracticeSession[];
+  getSessionsByDate: (dateStr: string) => PracticeSession[];
+  getAvailableDates: () => string[];
+  getDailySummary: (dateStr: string) => DailySummary;
   getSkillTrends: () => Record<SkillType, SkillTrendPoint[]>;
+  getBeatStabilityTrend: () => SkillTrendPoint[];
   getFailedLevels: () => FailedLevelRecord[];
   checkCanEnterLevel: (levelId: number) => { allowed: boolean; reason?: 'time' | 'difficulty' | 'locked' };
+  setLastSessionResult: (levelId: number, result: LastSessionResult) => void;
+  getLastSessionResult: (levelId: number) => LastSessionResult | null;
+  suggestFocus: (wrong: number, missed: number, avgDeviation: number) => FocusType;
 }
 
 function migrateReport(report: WeeklyReport): WeeklyReport {
@@ -422,20 +434,26 @@ export const useGameStore = create<GameStore>((set, get) => {
   },
 
   startLevelSession: () => {
-    if (!get().isDailyTimeExceeded()) {
-      set({ levelSessionStartTime: Date.now() });
+    if (get().isDailyTimeExceeded()) {
+      return null;
     }
+    const now = Date.now();
+    set({ levelSessionStartTime: now });
+    return now;
   },
 
   endLevelSession: () => {
     const { levelSessionStartTime } = get();
+    let elapsedMinutes = 0;
     if (levelSessionStartTime) {
       const elapsedMs = Date.now() - levelSessionStartTime;
-      const elapsedMinutes = Math.max(0.1, elapsedMs / 60000);
+      elapsedMinutes = Math.max(0.1, elapsedMs / 60000);
       const roundedMinutes = Math.round(elapsedMinutes * 10) / 10;
       get().addPlayTime(roundedMinutes);
+      elapsedMinutes = roundedMinutes;
     }
     set({ levelSessionStartTime: null });
+    return elapsedMinutes;
   },
 
   checkCanEnterLevel: (levelId) => {
@@ -464,6 +482,8 @@ export const useGameStore = create<GameStore>((set, get) => {
   recordPracticeSession: (sessionData) => {
     const today = new Date().toDateString();
     const fullSession: PracticeSession = {
+      rhythmEarlyCount: 0,
+      rhythmLateCount: 0,
       ...sessionData,
       id: `${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
       startTime: new Date().toISOString(),
@@ -487,6 +507,17 @@ export const useGameStore = create<GameStore>((set, get) => {
     }
     if (trend[skillKey].length > 7) trend[skillKey].shift();
     saveToStorage(STORAGE_KEYS.skillTrend, trend);
+
+    const beatStability = loadFromStorage<SkillTrendPoint[]>(STORAGE_KEYS.beatStabilityTrend, []);
+    const beatScore = Math.max(0, 100 - (sessionData.rhythmDeviationAvg * 100));
+    const lastBeat = beatStability[beatStability.length - 1];
+    if (lastBeat?.date === dateStr) {
+      lastBeat.score = (lastBeat.score + beatScore) / 2;
+    } else {
+      beatStability.push({ date: dateStr, score: beatScore });
+    }
+    if (beatStability.length > 7) beatStability.shift();
+    saveToStorage(STORAGE_KEYS.beatStabilityTrend, beatStability);
 
     if (!sessionData.passed) {
       const failed = loadFromStorage<Record<number, FailedLevelRecord>>(STORAGE_KEYS.failedLevels, {});
@@ -517,6 +548,61 @@ export const useGameStore = create<GameStore>((set, get) => {
     return log[today] ?? [];
   },
 
+  getSessionsByDate: (dateStr) => {
+    const key = new Date(dateStr).toDateString();
+    const log = loadFromStorage<Record<string, PracticeSession[]>>(STORAGE_KEYS.practiceLog, {});
+    return log[key] ?? [];
+  },
+
+  getAvailableDates: () => {
+    const log = loadFromStorage<Record<string, PracticeSession[]>>(STORAGE_KEYS.practiceLog, {});
+    return Object.keys(log).sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
+  },
+
+  getDailySummary: (dateStr) => {
+    const sessions = get().getSessionsByDate(dateStr);
+    const totalMinutes = sessions.reduce((sum, s) => sum + s.durationMinutes, 0);
+    const passedCount = sessions.filter(s => s.passed).length;
+    const weakestScores: Record<SkillType, { total: number; count: number }> = {
+      steady_beat: { total: 0, count: 0 },
+      sight_read: { total: 0, count: 0 },
+      interval_jump: { total: 0, count: 0 },
+      hand_switch: { total: 0, count: 0 },
+      continuous: { total: 0, count: 0 },
+    };
+    const focusStats: Record<FocusType, number> = { pitch: 0, rhythm: 0, completeness: 0 };
+    for (const s of sessions) {
+      weakestScores[s.skillType].total += s.skillScore;
+      weakestScores[s.skillType].count += 1;
+      if (s.wrongNoteCount >= s.missedNoteCount && s.wrongNoteCount >= s.rhythmDeviationAvg * 10) {
+        focusStats.pitch += 1;
+      } else if (s.rhythmDeviationAvg > 0.5) {
+        focusStats.rhythm += 1;
+      } else {
+        focusStats.completeness += 1;
+      }
+    }
+    let weakestSkill: SkillType = 'steady_beat';
+    let minAvg = Infinity;
+    (Object.keys(weakestScores) as SkillType[]).forEach(skill => {
+      const avg = weakestScores[skill].count > 0
+        ? weakestScores[skill].total / weakestScores[skill].count
+        : Infinity;
+      if (avg < minAvg) {
+        minAvg = avg;
+        weakestSkill = skill;
+      }
+    });
+    return {
+      date: dateStr,
+      totalMinutes: Math.round(totalMinutes * 10) / 10,
+      sessionCount: sessions.length,
+      passedCount,
+      weakestSkill,
+      focusStats,
+    };
+  },
+
   getSkillTrends: () => {
     const defaultTrends: Record<SkillType, SkillTrendPoint[]> = {
       steady_beat: [],
@@ -528,9 +614,34 @@ export const useGameStore = create<GameStore>((set, get) => {
     return loadFromStorage<Record<SkillType, SkillTrendPoint[]>>(STORAGE_KEYS.skillTrend, defaultTrends);
   },
 
+  getBeatStabilityTrend: () => {
+    return loadFromStorage<SkillTrendPoint[]>(STORAGE_KEYS.beatStabilityTrend, []);
+  },
+
   getFailedLevels: () => {
     const failed = loadFromStorage<Record<number, FailedLevelRecord>>(STORAGE_KEYS.failedLevels, {});
     return Object.values(failed).sort((a, b) => b.failCount - a.failCount);
+  },
+
+  setLastSessionResult: (levelId, result) => {
+    const all = loadFromStorage<Record<number, LastSessionResult>>(STORAGE_KEYS.lastSessionResult, {});
+    all[levelId] = result;
+    saveToStorage(STORAGE_KEYS.lastSessionResult, all);
+  },
+
+  getLastSessionResult: (levelId) => {
+    const all = loadFromStorage<Record<number, LastSessionResult>>(STORAGE_KEYS.lastSessionResult, {});
+    return all[levelId] ?? null;
+  },
+
+  suggestFocus: (wrong, missed, avgDeviation) => {
+    const total = wrong + missed + Math.round(avgDeviation * 10);
+    if (total === 0) return 'completeness';
+    if (wrong >= missed && wrong >= avgDeviation * 10) return 'pitch';
+    if (avgDeviation > 0.5 && avgDeviation * 10 >= missed) return 'rhythm';
+    if (missed > 0) return 'completeness';
+    if (avgDeviation > 0.3) return 'rhythm';
+    return 'pitch';
   },
 
   getLevelProgress: (levelId) => get().progress.find(p => p.levelId === levelId),

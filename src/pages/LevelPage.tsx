@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowLeft, Play, RotateCcw, Scissors, Star, Volume2, AlertTriangle, Target, Clock, Music, Award, TrendingUp, TrendingDown } from 'lucide-react';
+import { ArrowLeft, Play, RotateCcw, Scissors, Star, Volume2, AlertTriangle, Target, Clock, Music, Award, TrendingUp, TrendingDown, ArrowRight, Zap } from 'lucide-react';
 import { useGameStore } from '@/store/gameStore';
 import { getLevelById } from '@/data/gameData';
 import { AREAS } from '@/data/gameData';
-import type { Note, PracticeSpeed } from '@/types';
+import type { Note, PracticeSpeed, FocusType, LastSessionResult } from '@/types';
+import { FOCUS_LABELS, FOCUS_ICONS, FOCUS_TIPS } from '@/types';
 
 type GamePhase = 'ready' | 'countdown' | 'playing' | 'ended';
 
@@ -59,6 +60,9 @@ export default function LevelPage() {
   const isDailyTimeExceeded = useGameStore(s => s.isDailyTimeExceeded);
   const checkCanEnterLevel = useGameStore(s => s.checkCanEnterLevel);
   const recordPracticeSession = useGameStore(s => s.recordPracticeSession);
+  const getLastSessionResult = useGameStore(s => s.getLastSessionResult);
+  const setLastSessionResult = useGameStore(s => s.setLastSessionResult);
+  const suggestFocus = useGameStore(s => s.suggestFocus);
 
   const levelId = Number(id);
   const level = getLevelById(levelId);
@@ -81,14 +85,19 @@ export default function LevelPage() {
   const [earnedStars, setEarnedStars] = useState(0);
   const [earnedCoins, setEarnedCoins] = useState(0);
   const [rhythmDeviations, setRhythmDeviations] = useState<number[]>([]);
+  const [rhythmSignedDeviations, setRhythmSignedDeviations] = useState<number[]>([]);
   const [blockedMessage, setBlockedMessage] = useState<string | null>(null);
-  const [sessionStartTime] = useState(Date.now());
+  const [sessionStartTime, setSessionStartTime] = useState<number>(Date.now());
+  const [lastSessionResult, setLastSessionResultState] = useState<LastSessionResult | null>(null);
+  const [practiceFocus, setPracticeFocus] = useState<FocusType | null>(null);
+  const [noteStartTimes, setNoteStartTimes] = useState<number[]>([]);
 
   const allNotesRef = useRef<Note[]>([]);
   const beatTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const currentNoteIndexRef = useRef(0);
   const hasPressedRef = useRef(false);
   const phaseRef = useRef<GamePhase>('ready');
+  const noteStartTimesRef = useRef<number[]>([]);
 
   useEffect(() => {
     if (!level) return;
@@ -106,11 +115,19 @@ export default function LevelPage() {
       return () => clearTimeout(timer);
     }
 
-    startLevelSession();
+    const lastResult = getLastSessionResult(levelId);
+    if (lastResult) {
+      setLastSessionResultState(lastResult);
+      setPracticeFocus(lastResult.suggestedFocus);
+    }
+
+    const startTs = startLevelSession();
+    if (startTs) setSessionStartTime(startTs);
+
     return () => {
       endLevelSession();
     };
-  }, [levelId, level, checkCanEnterLevel, startLevelSession, endLevelSession, navigate]);
+  }, [levelId, level, checkCanEnterLevel, startLevelSession, endLevelSession, navigate, getLastSessionResult]);
 
   useEffect(() => {
     phaseRef.current = phase;
@@ -153,13 +170,28 @@ export default function LevelPage() {
     const avgRhythmDeviation = rhythmDeviations.length > 0
       ? rhythmDeviations.reduce((a, b) => a + b, 0) / rhythmDeviations.length
       : 0;
+    const earlyCount = rhythmSignedDeviations.filter(d => d < -0.2).length;
+    const lateCount = rhythmSignedDeviations.filter(d => d > 0.2).length;
 
     const result = completeLevel(levelId, acc);
 
     setEarnedStars(result.stars);
     setEarnedCoins(result.coins);
 
-    const durationMinutes = Math.max(0.1, (Date.now() - sessionStartTime) / 60000);
+    const elapsedMinutes = endLevelSession();
+    const durationMinutes = elapsedMinutes > 0 ? elapsedMinutes : Math.max(0.1, (Date.now() - sessionStartTime) / 60000);
+
+    const suggestedFocus = suggestFocus(wrongCount, missedCount, avgRhythmDeviation);
+
+    setLastSessionResult(levelId, {
+      accuracy: acc,
+      wrongNoteCount: wrongCount,
+      missedNoteCount: missedCount,
+      rhythmDeviationAvg: avgRhythmDeviation,
+      rhythmEarlyCount: earlyCount,
+      rhythmLateCount: lateCount,
+      suggestedFocus,
+    });
 
     if (level && area) {
       recordPracticeSession({
@@ -176,10 +208,13 @@ export default function LevelPage() {
         wrongNoteCount: wrongCount,
         missedNoteCount: missedCount,
         rhythmDeviationAvg: avgRhythmDeviation,
+        rhythmEarlyCount: earlyCount,
+        rhythmLateCount: lateCount,
         skillScore: acc * 100,
+        practiceFocus: practiceFocus ?? undefined,
       });
     }
-  }, [correctCount, levelId, completeLevel, stopBeatTimer, rhythmDeviations, level, area, sessionStartTime, practiceSpeed, wrongCount, missedCount, recordPracticeSession]);
+  }, [correctCount, levelId, completeLevel, stopBeatTimer, rhythmDeviations, rhythmSignedDeviations, level, area, sessionStartTime, practiceSpeed, wrongCount, missedCount, recordPracticeSession, endLevelSession, suggestFocus, setLastSessionResult, practiceFocus]);
 
   const advanceNote = useCallback(() => {
     const currentIdx = currentNoteIndexRef.current;
@@ -202,6 +237,8 @@ export default function LevelPage() {
     setCurrentNoteIndex(nextIdx);
     hasPressedRef.current = false;
 
+    noteStartTimesRef.current[nextIdx] = Date.now();
+
     const note = notes[nextIdx];
     if (note) {
       setBeatInMeasure(note.beatPosition);
@@ -222,7 +259,10 @@ export default function LevelPage() {
     setFlashNotes({});
     setBeatInMeasure(1);
     setShakeScreen(false);
+    setRhythmDeviations([]);
+    setRhythmSignedDeviations([]);
     hasPressedRef.current = false;
+    noteStartTimesRef.current = [Date.now()];
 
     setPhase('playing');
     phaseRef.current = 'playing';
@@ -265,29 +305,31 @@ export default function LevelPage() {
     setBeatInMeasure(1);
     setShakeScreen(false);
     setRhythmDeviations([]);
+    setRhythmSignedDeviations([]);
     hasPressedRef.current = false;
   }, []);
 
-  const handleRetry = useCallback((speed: PracticeSpeed = 'normal') => {
+  const handleRetry = useCallback((speed: PracticeSpeed = 'normal', focusOverride?: FocusType) => {
+    const prevFocus = practiceFocus;
+    if (focusOverride) {
+      setPracticeFocus(focusOverride);
+    }
     setPracticeSpeed(speed);
     resetLevelState();
     setEarnedStars(0);
     setEarnedCoins(0);
+
+    const newStartTs = startLevelSession();
+    if (newStartTs) setSessionStartTime(newStartTs);
+
     handleCountdown();
 
-    if (speed === 'slow') {
-      const slowBpm = Math.round((level?.bpm ?? 60) * 0.7);
-      setTimeout(() => {
-        stopBeatTimer();
-        startPlaying(slowBpm);
-      }, 2400);
-    } else {
-      setTimeout(() => {
-        stopBeatTimer();
-        startPlaying(level?.bpm ?? 60);
-      }, 2400);
-    }
-  }, [level, handleCountdown, startPlaying, stopBeatTimer, resetLevelState]);
+    const targetBpm = speed === 'slow' ? Math.round((level?.bpm ?? 60) * 0.7) : (level?.bpm ?? 60);
+    setTimeout(() => {
+      stopBeatTimer();
+      startPlaying(targetBpm);
+    }, 2400);
+  }, [level, handleCountdown, startPlaying, stopBeatTimer, resetLevelState, startLevelSession, practiceFocus]);
 
   const handleSlowRetry = useCallback(() => {
     handleRetry('slow');
@@ -324,10 +366,15 @@ export default function LevelPage() {
     hasPressedRef.current = true;
 
     const expected = notes[currentIdx];
-    const beatDiff = beatInMeasure - expected.beatPosition;
-    const absBeatDiff = Math.abs(beatDiff);
+    const noteStartTime = noteStartTimesRef.current[currentIdx] ?? Date.now();
+    const beatMs = 60000 / (bpm || 60);
+    const elapsedMs = Date.now() - noteStartTime;
+    const signedBeatDiff = (elapsedMs / beatMs) - 1;
+    const absBeatDiff = Math.abs(signedBeatDiff);
+
     if (absBeatDiff > 0.2) {
       setRhythmDeviations(prev => [...prev, absBeatDiff]);
+      setRhythmSignedDeviations(prev => [...prev, signedBeatDiff]);
     }
 
     if (pressedNote === expected.pitch) {
@@ -356,7 +403,7 @@ export default function LevelPage() {
         });
       }, 400);
     }
-  }, [totalNotes, obstacleIcon]);
+  }, [totalNotes, obstacleIcon, bpm]);
 
   useEffect(() => {
     window.addEventListener('keydown', handleKeyDown);
@@ -659,7 +706,7 @@ export default function LevelPage() {
             exit={{ opacity: 0 }}
           >
             <motion.div
-              className="bg-white rounded-3xl p-8 text-center shadow-2xl max-w-sm mx-4"
+              className="bg-white rounded-3xl p-8 text-center shadow-2xl max-w-sm mx-4 max-h-[90vh] overflow-y-auto"
               initial={{ scale: 0.8, y: 20 }}
               animate={{ scale: 1, y: 0 }}
               exit={{ scale: 0.8, y: 20 }}
@@ -667,13 +714,60 @@ export default function LevelPage() {
               <div className="text-4xl mb-3">{area?.icon ?? '🎵'}</div>
               <h2 className="text-2xl font-bold text-gray-800 mb-1">{level.name}</h2>
               <p className="text-sm text-gray-500 mb-1">{level.description}</p>
-              <p className="text-xs text-gray-400 mb-4">
+              <p className="text-xs text-gray-400 mb-3">
                 难度: {level.difficulty === 'easy' ? '⭐' : level.difficulty === 'medium' ? '⭐⭐' : '⭐⭐⭐'}
                 {' · '}BPM: {level.bpm}
               </p>
               <div className="text-xs text-gray-400 mb-4">
                 {totalNotes} 个音符 · {level.musicData.measures.length} 小节
               </div>
+
+              {lastSessionResult && practiceFocus && (
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="mb-4 text-left rounded-2xl p-4"
+                  style={{
+                    background: practiceFocus === 'pitch'
+                      ? 'linear-gradient(135deg, #FEF3C7, #FDE68A)'
+                      : practiceFocus === 'rhythm'
+                        ? 'linear-gradient(135deg, #DBEAFE, #BFDBFE)'
+                        : 'linear-gradient(135deg, #D1FAE5, #A7F3D0)',
+                  }}
+                >
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-2xl">{FOCUS_ICONS[practiceFocus]}</span>
+                    <div>
+                      <p className="font-bold text-gray-800 text-sm">本次重点练习</p>
+                      <p className="font-bold text-base" style={{
+                        color: practiceFocus === 'pitch' ? '#B45309'
+                          : practiceFocus === 'rhythm' ? '#1D4ED8'
+                            : '#047857',
+                      }}>
+                        {FOCUS_LABELS[practiceFocus]}
+                      </p>
+                    </div>
+                  </div>
+                  <p className="text-xs text-gray-700 mb-2">
+                    💡 {FOCUS_TIPS[practiceFocus]}
+                  </p>
+                  <div className="grid grid-cols-3 gap-1 text-center text-[10px]">
+                    <div className="bg-white/60 rounded-lg p-1.5">
+                      <p className="text-gray-500">上次正确率</p>
+                      <p className="font-bold text-gray-800">{Math.round(lastSessionResult.accuracy * 100)}%</p>
+                    </div>
+                    <div className="bg-white/60 rounded-lg p-1.5">
+                      <p className="text-gray-500">错音/漏按</p>
+                      <p className="font-bold text-gray-800">{lastSessionResult.wrongNoteCount}/{lastSessionResult.missedNoteCount}</p>
+                    </div>
+                    <div className="bg-white/60 rounded-lg p-1.5">
+                      <p className="text-gray-500">节拍偏差</p>
+                      <p className="font-bold text-gray-800">{lastSessionResult.rhythmDeviationAvg.toFixed(2)}</p>
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+
               <button
                 onClick={handleCountdown}
                 className="px-8 py-3 bg-orange-400 hover:bg-orange-500 text-white rounded-full text-lg font-bold flex items-center gap-2 mx-auto transition-colors shadow-lg shadow-orange-200"
@@ -713,22 +807,22 @@ export default function LevelPage() {
             exit={{ opacity: 0 }}
           >
             <motion.div
-              className="bg-white rounded-3xl p-8 text-center shadow-2xl max-w-sm mx-4"
+              className="bg-white rounded-3xl p-6 text-center shadow-2xl max-w-sm mx-4 max-h-[90vh] overflow-y-auto"
               initial={{ scale: 0.8, y: 20 }}
               animate={{ scale: 1, y: 0 }}
               exit={{ scale: 0.8, y: 20 }}
             >
-              <div className="text-4xl mb-3">
+              <div className="text-4xl mb-2">
                 {earnedStars >= 3 ? '🎉' : earnedStars >= 1 ? '👏' : '💪'}
               </div>
-              <h2 className="text-2xl font-bold text-gray-800 mb-2">
+              <h2 className="text-2xl font-bold text-gray-800 mb-1">
                 {earnedStars >= 3 ? '太棒了！' : earnedStars >= 1 ? '继续加油！' : '再试一次！'}
               </h2>
-              <div className="flex items-center justify-center gap-1 mb-3">
+              <div className="flex items-center justify-center gap-1 mb-2">
                 {[1, 2, 3].map(s => (
                   <Star
                     key={s}
-                    size={28}
+                    size={24}
                     className={s <= earnedStars ? 'fill-yellow-400 text-yellow-400' : 'text-gray-300'}
                   />
                 ))}
@@ -737,7 +831,49 @@ export default function LevelPage() {
                 正确率: {Math.round(accuracy * 100)}%
               </div>
 
-              <div className="bg-gray-50 rounded-2xl p-4 my-3 text-left">
+              {lastSessionResult && (
+                <motion.div
+                  initial={{ opacity: 0, y: 5 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="bg-gradient-to-r from-green-50 to-blue-50 rounded-xl p-2 mb-3 text-xs flex items-center justify-around gap-1"
+                >
+                  {accuracy > lastSessionResult.accuracy ? (
+                    <span className="text-green-600 font-semibold flex items-center gap-0.5">
+                      <TrendingUp size={12} />
+                      正确率 +{((accuracy - lastSessionResult.accuracy) * 100).toFixed(0)}%
+                    </span>
+                  ) : accuracy < lastSessionResult.accuracy ? (
+                    <span className="text-red-500 font-semibold flex items-center gap-0.5">
+                      <TrendingDown size={12} />
+                      正确率 {((accuracy - lastSessionResult.accuracy) * 100).toFixed(0)}%
+                    </span>
+                  ) : (
+                    <span className="text-gray-500 font-semibold flex items-center gap-0.5">
+                      ➡️ 正确率一致
+                    </span>
+                  )}
+                  {wrongCount < lastSessionResult.wrongNoteCount ? (
+                    <span className="text-green-600 font-semibold">
+                      错音 -{lastSessionResult.wrongNoteCount - wrongCount}
+                    </span>
+                  ) : wrongCount > lastSessionResult.wrongNoteCount ? (
+                    <span className="text-orange-500 font-semibold">
+                      错音 +{wrongCount - lastSessionResult.wrongNoteCount}
+                    </span>
+                  ) : null}
+                  {missedCount < lastSessionResult.missedNoteCount ? (
+                    <span className="text-green-600 font-semibold">
+                      漏按 -{lastSessionResult.missedNoteCount - missedCount}
+                    </span>
+                  ) : missedCount > lastSessionResult.missedNoteCount ? (
+                    <span className="text-orange-500 font-semibold">
+                      漏按 +{missedCount - lastSessionResult.missedNoteCount}
+                    </span>
+                  ) : null}
+                </motion.div>
+              )}
+
+              <div className="bg-gray-50 rounded-2xl p-3 my-2 text-left">
                 <h3 className="font-bold text-gray-700 mb-2 text-sm flex items-center gap-1">
                   <Target size={14} />
                   练习分析
@@ -756,33 +892,68 @@ export default function LevelPage() {
                     <div className="text-orange-500 text-[10px]">⏭️ 漏按</div>
                   </div>
                 </div>
-                <div className="mt-2 bg-blue-50 rounded-xl p-2 text-center">
-                  <div className="text-blue-600 font-bold text-sm">
-                    节拍偏差: {rhythmDeviations.length > 0 ? (rhythmDeviations.reduce((a, b) => a + b, 0) / rhythmDeviations.length).toFixed(2) : '0.00'} 拍
+                <div className="mt-2 bg-blue-50 rounded-xl p-2">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-blue-600 font-bold text-sm">
+                        节拍偏差: {rhythmDeviations.length > 0 ? (rhythmDeviations.reduce((a, b) => a + b, 0) / rhythmDeviations.length).toFixed(2) : '0.00'} 拍
+                      </div>
+                      <div className="text-blue-600 text-[10px]">⏱️ 平均误差</div>
+                    </div>
+                    <div className="flex flex-col items-end gap-0.5 text-[10px]">
+                      {rhythmSignedDeviations.filter(d => d < -0.2).length > 0 && (
+                        <span className="text-purple-600 font-semibold">
+                          ⚡ 偏早 {rhythmSignedDeviations.filter(d => d < -0.2).length} 次
+                        </span>
+                      )}
+                      {rhythmSignedDeviations.filter(d => d > 0.2).length > 0 && (
+                        <span className="text-amber-600 font-semibold">
+                          🐢 偏晚 {rhythmSignedDeviations.filter(d => d > 0.2).length} 次
+                        </span>
+                      )}
+                      {rhythmSignedDeviations.filter(d => d < -0.2).length === 0 && rhythmSignedDeviations.filter(d => d > 0.2).length === 0 && (
+                        <span className="text-green-600 font-semibold">
+                          ✨ 节拍稳定
+                        </span>
+                      )}
+                    </div>
                   </div>
-                  <div className="text-blue-600 text-[10px]">⏱️ 平均误差</div>
                 </div>
               </div>
 
-              {correctCount < totalNotes * 0.7 && (
-                <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-3">
-                  <p className="text-xs text-amber-700 font-semibold flex items-start gap-1">
-                    <AlertTriangle size={14} className="mt-0.5 shrink-0" />
-                    <span>
-                      {wrongCount > missedCount
-                        ? '下次要注意看准音高哦！'
-                        : missedCount > wrongCount
-                          ? '试试跟着节拍器打拍，不要漏音！'
-                          : rhythmDeviations.length > 0 && rhythmDeviations.reduce((a, b) => a + b, 0) / rhythmDeviations.length > 0.5
-                            ? '节拍不太稳，先慢一点练速度！'
-                            : '多练习几次就能越来越好！'
-                      }
-                    </span>
-                  </p>
-                </div>
-              )}
+              {(() => {
+                const focus = suggestFocus(wrongCount, missedCount, rhythmDeviations.length > 0 ? rhythmDeviations.reduce((a, b) => a + b, 0) / rhythmDeviations.length : 0);
+                return (
+                  <motion.div
+                    initial={{ opacity: 0, y: 5 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="rounded-xl p-3 mb-3 text-left"
+                    style={{
+                      background: focus === 'pitch'
+                        ? 'linear-gradient(135deg, #FEF3C7, #FDE68A)'
+                        : focus === 'rhythm'
+                          ? 'linear-gradient(135deg, #DBEAFE, #BFDBFE)'
+                          : 'linear-gradient(135deg, #D1FAE5, #A7F3D0)',
+                    }}
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <Zap size={14} className={
+                        focus === 'pitch' ? 'text-amber-600'
+                          : focus === 'rhythm' ? 'text-blue-600'
+                            : 'text-green-600'
+                      } />
+                      <p className="text-xs font-bold text-gray-700">
+                        下次重点练习: <span className="text-sm">{FOCUS_ICONS[focus]} {FOCUS_LABELS[focus]}</span>
+                      </p>
+                    </div>
+                    <p className="text-[11px] text-gray-600">
+                      💡 {FOCUS_TIPS[focus]}
+                    </p>
+                  </motion.div>
+                );
+              })()}
 
-              <div className="text-sm text-amber-600 font-bold mb-4">
+              <div className="text-sm text-amber-600 font-bold mb-3">
                 🪙 +{earnedCoins}
               </div>
               <div className="flex flex-col gap-2">

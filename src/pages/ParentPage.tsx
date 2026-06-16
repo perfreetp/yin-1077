@@ -1,12 +1,18 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Shield, Clock, BarChart3, Lock, Save, ChevronLeft } from 'lucide-react';
+import { Shield, Clock, BarChart3, Lock, Save, ChevronLeft, ChevronDown, ChevronRight } from 'lucide-react';
 import { useGameStore } from '@/store/gameStore';
-import { SKILL_LABELS } from '@/types';
-import type { SkillType, PracticeSpeed } from '@/types';
+import { SKILL_LABELS, FOCUS_LABELS } from '@/types';
+import type { SkillType, PracticeSpeed, FocusType } from '@/types';
 
 const TIME_OPTIONS = [15, 30, 45, 60, 90, 120];
+
+const speedLabels: Record<PracticeSpeed, { text: string; color: string }> = {
+  normal: { text: '普通', color: 'bg-gray-100 text-gray-600' },
+  slow: { text: '慢速', color: 'bg-blue-100 text-blue-600' },
+  phrase: { text: '分句', color: 'bg-green-100 text-green-600' },
+};
 
 const RADAR_SIZE = 200;
 const RADAR_CENTER = RADAR_SIZE / 2;
@@ -350,7 +356,9 @@ function SettingsPanel() {
   const getSkillScores = useGameStore(s => s.getSkillScores);
   const initStore = useGameStore(s => s.initStore);
   const todayPlayTime = useGameStore(s => s.todayPlayTime);
-  const getTodaySessions = useGameStore(s => s.getTodaySessions);
+  const getAvailableDates = useGameStore(s => s.getAvailableDates);
+  const getSessionsByDate = useGameStore(s => s.getSessionsByDate);
+  const getDailySummary = useGameStore(s => s.getDailySummary);
 
   useEffect(() => {
     initStore();
@@ -358,27 +366,58 @@ function SettingsPanel() {
 
   const [saved, setSaved] = useState(false);
   const [showChangePin, setShowChangePin] = useState(false);
+  const [selectedDate, setSelectedDate] = useState<string>(new Date().toDateString());
+  const [expandedDates, setExpandedDates] = useState<Set<string>>(new Set());
 
   const [timeLimit, setTimeLimit] = useState(settings.dailyTimeLimit);
   const [maxDifficulty, setMaxDifficulty] = useState(settings.maxDifficulty);
 
   const skillScores = useMemo(() => getSkillScores(), [getSkillScores]);
 
-  const todaySessions = useMemo(() => {
-    const sessions = getTodaySessions();
+  const availableDates = useMemo(() => {
+    const dates = getAvailableDates();
+    const today = new Date().toDateString();
+    if (!dates.includes(today)) {
+      return [today, ...dates];
+    }
+    return dates;
+  }, [getAvailableDates]);
+
+  const dailySummary = useMemo(() => getDailySummary(selectedDate), [getDailySummary, selectedDate]);
+
+  const selectedSessions = useMemo(() => {
+    const sessions = getSessionsByDate(selectedDate);
     return [...sessions].sort((a, b) => 
       new Date(b.startTime).getTime() - new Date(a.startTime).getTime()
     );
-  }, [getTodaySessions]);
+  }, [getSessionsByDate, selectedDate]);
 
-  const totalSessions = todaySessions.length;
-  const totalPracticeTime = todaySessions.reduce((sum, s) => sum + s.durationMinutes, 0);
-
-  const speedLabels: Record<PracticeSpeed, { text: string; color: string }> = {
-    normal: { text: '普通', color: 'bg-gray-100 text-gray-600' },
-    slow: { text: '慢速', color: 'bg-blue-100 text-blue-600' },
-    phrase: { text: '分句', color: 'bg-green-100 text-green-600' },
+  const toggleExpand = (sessionId: string) => {
+    setExpandedDates(prev => {
+      const next = new Set(prev);
+      if (next.has(sessionId)) {
+        next.delete(sessionId);
+      } else {
+        next.add(sessionId);
+      }
+      return next;
+    });
   };
+
+  const formatDateDisplay = (dateStr: string) => {
+    const d = new Date(dateStr);
+    const month = d.getMonth() + 1;
+    const day = d.getDate();
+    const weekday = d.toLocaleDateString('zh-CN', { weekday: 'short' });
+    return `${month}月${day}日 ${weekday}`;
+  };
+
+  const formatTime = (isoStr: string) => {
+    const d = new Date(isoStr);
+    return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  };
+
+  const today = new Date().toDateString();
 
   const handleSave = () => {
     updateSettings({ dailyTimeLimit: timeLimit, maxDifficulty });
@@ -524,62 +563,194 @@ function SettingsPanel() {
         >
           <div className="flex items-center gap-2 mb-4">
             <BarChart3 className="w-5 h-5 text-primary" />
-            <h2 className="font-display text-base font-bold text-gray-800">📝 今日练习明细</h2>
+            <h2 className="font-display text-base font-bold text-gray-800">📝 练习明细</h2>
           </div>
 
-          {todaySessions.length === 0 ? (
+          <div className="flex gap-2 overflow-x-auto pb-2 mb-4 -mx-1 px-1">
+            {availableDates.map((dateStr) => {
+              const isSelected = selectedDate === dateStr;
+              const isToday = dateStr === today;
+              return (
+                <button
+                  key={dateStr}
+                  onClick={() => setSelectedDate(dateStr)}
+                  className={`flex-shrink-0 px-3 py-2 rounded-xl font-body text-xs font-semibold transition-all ${
+                    isSelected
+                      ? 'bg-primary text-white shadow-game'
+                      : 'bg-cream text-gray-600'
+                  }`}
+                >
+                  <div className="flex items-center gap-1">
+                    <span>{formatDateDisplay(dateStr)}</span>
+                    {isToday && (
+                      <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${
+                        isSelected ? 'bg-white/25 text-white' : 'bg-primary/10 text-primary'
+                      }`}>
+                        今天
+                      </span>
+                    )}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          {dailySummary.sessionCount > 0 ? (
+            <div className="bg-cream rounded-xl p-3 mb-4">
+              <div className="grid grid-cols-3 gap-2 mb-3">
+                <div className="text-center p-2 rounded-lg bg-white">
+                  <p className="font-display text-lg font-bold text-primary">
+                    {dailySummary.totalMinutes.toFixed(1)}
+                  </p>
+                  <p className="font-body text-[10px] text-gray-500">总时长(分)</p>
+                </div>
+                <div className="text-center p-2 rounded-lg bg-white">
+                  <p className="font-display text-lg font-bold text-primary">
+                    {dailySummary.sessionCount}
+                  </p>
+                  <p className="font-body text-[10px] text-gray-500">练习次数</p>
+                </div>
+                <div className="text-center p-2 rounded-lg bg-white">
+                  <p className="font-display text-lg font-bold text-green-600">
+                    {dailySummary.passedCount}
+                  </p>
+                  <p className="font-body text-[10px] text-gray-500">通过次数</p>
+                </div>
+              </div>
+              <div className="flex items-center justify-between mb-2">
+                <span className="font-body text-xs text-gray-500">薄弱技能</span>
+                <span className="px-2 py-0.5 rounded-full bg-red-100 text-red-600 font-body text-xs font-semibold">
+                  {SKILL_LABELS[dailySummary.weakestSkill]}
+                </span>
+              </div>
+              <div className="space-y-1">
+                <p className="font-body text-xs text-gray-500 mb-1">专注方向分布</p>
+                {(Object.keys(dailySummary.focusStats) as FocusType[]).map((focus) => {
+                  const total = Object.values(dailySummary.focusStats).reduce((s, v) => s + v, 0);
+                  const pct = total > 0 ? (dailySummary.focusStats[focus] / total) * 100 : 0;
+                  return (
+                    <div key={focus} className="flex items-center gap-2">
+                      <span className="font-body text-[10px] text-gray-600 w-14">
+                        {FOCUS_LABELS[focus]}
+                      </span>
+                      <div className="flex-1 h-2 rounded-full bg-white overflow-hidden">
+                        <div
+                          className="h-full bg-primary rounded-full transition-all"
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                      <span className="font-body text-[10px] text-gray-500 w-6 text-right">
+                        {dailySummary.focusStats[focus]}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
+
+          {selectedSessions.length === 0 ? (
             <p className="font-body text-sm text-gray-400 text-center py-6">
-              今天还没有练习记录，快去闯关吧！
+              这一天还没有练习记录，继续加油哦！
             </p>
           ) : (
             <div className="space-y-3">
-              {todaySessions.map((session) => (
-                <div
-                  key={session.id}
-                  className="bg-cream rounded-xl p-3"
-                >
-                  <div className="flex items-start justify-between mb-2">
-                    <div>
-                      <p className="font-display text-sm font-bold text-gray-800">
-                        {session.levelName} · {session.areaName}
-                      </p>
-                      <div className="flex items-center gap-2 mt-1">
-                        <span className="px-2 py-0.5 rounded-full bg-primary/10 text-primary font-body text-xs font-semibold">
-                          {SKILL_LABELS[session.skillType]}
-                        </span>
-                        <span className={`px-2 py-0.5 rounded-full font-body text-xs font-semibold ${speedLabels[session.speed].color}`}>
-                          {speedLabels[session.speed].text}
+              {selectedSessions.map((session) => {
+                const isExpanded = expandedDates.has(session.id);
+                return (
+                  <div
+                    key={session.id}
+                    className="bg-cream rounded-xl overflow-hidden"
+                  >
+                    <button
+                      onClick={() => toggleExpand(session.id)}
+                      className="w-full p-3 text-left"
+                    >
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2">
+                            <p className="font-display text-sm font-bold text-gray-800">
+                              {session.levelName}
+                            </p>
+                            {isExpanded ? (
+                              <ChevronDown className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                            ) : (
+                              <ChevronRight className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                            )}
+                          </div>
+                          <p className="font-body text-[10px] text-gray-500 mt-0.5">
+                            {formatTime(session.startTime)} · {session.areaName}
+                          </p>
+                        </div>
+                        <p className="font-body text-xs text-gray-500">
+                          {session.durationMinutes.toFixed(1)} 分
+                        </p>
+                      </div>
+                      <div className="flex items-center justify-between mt-2">
+                        {session.passed ? (
+                          <span className="font-body text-xs font-semibold text-green-600">
+                            ✅ 通关 {session.stars}★
+                          </span>
+                        ) : (
+                          <span className="font-body text-xs font-semibold text-red-500">
+                            ❌ 未通过
+                          </span>
+                        )}
+                        <span className="font-body text-xs font-semibold text-gray-600">
+                          准确率 {(session.accuracy * 100).toFixed(0)}%
                         </span>
                       </div>
-                    </div>
-                    <p className="font-body text-xs text-gray-500">
-                      {session.durationMinutes.toFixed(1)} 分钟
-                    </p>
+                    </button>
+                    <AnimatePresence>
+                      {isExpanded && (
+                        <motion.div
+                          initial={{ height: 0, opacity: 0 }}
+                          animate={{ height: 'auto', opacity: 1 }}
+                          exit={{ height: 0, opacity: 0 }}
+                          className="overflow-hidden"
+                        >
+                          <div className="px-3 pb-3 pt-0 space-y-2 border-t border-white/60">
+                            <div className="flex flex-wrap gap-2 pt-2">
+                              <span className={`px-2 py-0.5 rounded-full font-body text-[10px] font-semibold ${speedLabels[session.speed].color}`}>
+                                {speedLabels[session.speed].text}
+                              </span>
+                              <span className="px-2 py-0.5 rounded-full bg-primary/10 text-primary font-body text-[10px] font-semibold">
+                                {SKILL_LABELS[session.skillType]}
+                              </span>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2">
+                              <div className="p-2 rounded-lg bg-white">
+                                <p className="font-body text-[10px] text-gray-500">错音</p>
+                                <p className="font-display text-sm font-bold text-red-500">
+                                  {session.wrongNoteCount}
+                                </p>
+                              </div>
+                              <div className="p-2 rounded-lg bg-white">
+                                <p className="font-body text-[10px] text-gray-500">漏音</p>
+                                <p className="font-display text-sm font-bold text-orange-500">
+                                  {session.missedNoteCount}
+                                </p>
+                              </div>
+                              <div className="p-2 rounded-lg bg-white">
+                                <p className="font-body text-[10px] text-gray-500">节奏偏差</p>
+                                <p className="font-display text-sm font-bold text-blue-500">
+                                  {(session.rhythmDeviationAvg * 100).toFixed(1)}%
+                                </p>
+                              </div>
+                              <div className="p-2 rounded-lg bg-white">
+                                <p className="font-body text-[10px] text-gray-500">早/晚拍</p>
+                                <p className="font-display text-sm font-bold text-purple-500">
+                                  {session.rhythmEarlyCount} / {session.rhythmLateCount}
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
                   </div>
-                  <div className="flex items-center justify-between">
-                    {session.passed ? (
-                      <span className="font-body text-xs font-semibold text-green-600">
-                        ✅ 通关 {session.stars}★
-                      </span>
-                    ) : (
-                      <span className="font-body text-xs font-semibold text-red-500">
-                        ❌ 未通过
-                      </span>
-                    )}
-                    <span className="font-body text-xs font-semibold text-gray-600">
-                      准确率 {(session.accuracy * 100).toFixed(0)}%
-                    </span>
-                  </div>
-                </div>
-              ))}
-              <div className="flex justify-between pt-2 border-t border-gray-100">
-                <span className="font-body text-xs text-gray-500">
-                  共 {totalSessions} 次练习
-                </span>
-                <span className="font-body text-xs font-semibold text-primary">
-                  总时长 {totalPracticeTime.toFixed(1)} 分钟
-                </span>
-              </div>
+                );
+              })}
             </div>
           )}
         </motion.section>
