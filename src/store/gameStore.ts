@@ -8,6 +8,7 @@ import {
   SkillScore,
   SkillType,
 } from '@/types';
+import { ALL_RHYTHM_PATTERNS, ALL_KEY_SIGNATURES } from '@/types';
 import { AREAS, LEVELS, ITEMS } from '@/data/gameData';
 
 const STORAGE_KEYS = {
@@ -86,6 +87,8 @@ function createDefaultWeeklyReport(): WeeklyReport {
     levelsCompleted: 0,
     strongestSkill: 'steady_beat',
     weakestSkill: 'continuous',
+    masteredRhythms: [],
+    masteredKeys: [],
   };
 }
 
@@ -102,7 +105,7 @@ interface GameStore {
   setPlayerName: (name: string) => void;
   addCoins: (amount: number) => void;
   spendCoins: (amount: number) => boolean;
-  completeLevel: (levelId: number, accuracy: number) => number;
+  completeLevel: (levelId: number, accuracy: number) => { stars: number; coins: number; passed: boolean };
   unlockNextLevel: (levelId: number) => void;
   purchaseItem: (itemId: number) => boolean;
   equipItem: (itemId: number) => void;
@@ -120,12 +123,20 @@ interface GameStore {
   getSkillScores: () => SkillScore;
 }
 
+function migrateReport(report: WeeklyReport): WeeklyReport {
+  return {
+    ...report,
+    masteredRhythms: report.masteredRhythms ?? [],
+    masteredKeys: report.masteredKeys ?? [],
+  };
+}
+
 export const useGameStore = create<GameStore>((set, get) => ({
   player: loadFromStorage(STORAGE_KEYS.player, createDefaultPlayer()),
   progress: loadFromStorage(STORAGE_KEYS.progress, createDefaultProgress()),
   inventory: loadFromStorage(STORAGE_KEYS.inventory, []),
   settings: loadFromStorage(STORAGE_KEYS.settings, createDefaultSettings()),
-  weeklyReport: loadFromStorage(STORAGE_KEYS.weeklyReport, createDefaultWeeklyReport()),
+  weeklyReport: migrateReport(loadFromStorage(STORAGE_KEYS.weeklyReport, createDefaultWeeklyReport())),
   todayPlayTime: 0,
   lastPlayDate: '',
 
@@ -159,24 +170,47 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   completeLevel: (levelId, accuracy) => {
-    const { progress, player } = get();
+    const { progress, player, weeklyReport } = get();
     const idx = progress.findIndex(p => p.levelId === levelId);
-    if (idx === -1) return 0;
+    if (idx === -1) return { stars: 0, coins: 0, passed: false };
 
     let stars = 0;
     if (accuracy >= 0.9) stars = 3;
     else if (accuracy >= 0.7) stars = 2;
     else if (accuracy >= 0.5) stars = 1;
 
-    const coinReward = stars * 10 + (LEVELS.find(l => l.id === levelId)?.isBoss ? 50 : 0);
+    const passed = stars >= 1;
+    const prev = progress[idx];
+    const improved = stars > prev.stars;
+    const isFirstPass = !prev.completedAt && passed;
 
     const updated = [...progress];
-    updated[idx] = {
-      ...updated[idx],
-      stars: Math.max(updated[idx].stars, stars),
-      bestAccuracy: Math.max(updated[idx].bestAccuracy, accuracy),
-      completedAt: new Date().toISOString(),
-    };
+
+    if (passed) {
+      updated[idx] = {
+        ...updated[idx],
+        stars: Math.max(updated[idx].stars, stars),
+        bestAccuracy: Math.max(updated[idx].bestAccuracy, accuracy),
+        completedAt: new Date().toISOString(),
+      };
+    } else {
+      updated[idx] = {
+        ...updated[idx],
+        bestAccuracy: Math.max(updated[idx].bestAccuracy, accuracy),
+      };
+    }
+
+    let coinReward = 0;
+    if (passed && improved) {
+      const starGain = stars - prev.stars;
+      coinReward = starGain * 10;
+      if (LEVELS.find(l => l.id === levelId)?.isBoss && isFirstPass) {
+        coinReward += 50;
+      }
+      if (isFirstPass) {
+        coinReward += 5;
+      }
+    }
 
     const updatedPlayer = { ...player, coins: player.coins + coinReward };
 
@@ -184,9 +218,47 @@ export const useGameStore = create<GameStore>((set, get) => ({
     saveToStorage(STORAGE_KEYS.player, updatedPlayer);
     set({ progress: updated, player: updatedPlayer });
 
-    get().unlockNextLevel(levelId);
+    if (passed) {
+      get().unlockNextLevel(levelId);
+    }
 
-    return stars;
+    if (passed) {
+      const report = { ...weeklyReport };
+      report.levelsCompleted = report.levelsCompleted + 1;
+      report.totalPracticeTime = report.totalPracticeTime + 2;
+
+      const lvl = LEVELS.find(l => l.id === levelId);
+      if (lvl) {
+        const skillKey = lvl.skillType;
+        const currentScore = report.scores[skillKey];
+        const newScore = currentScore === 0 ? accuracy * 100 : (currentScore * 0.6) + (accuracy * 100 * 0.4);
+        report.scores = { ...report.scores, [skillKey]: newScore };
+
+        const entries = Object.entries(report.scores) as [SkillType, number][];
+        const sorted = entries.sort((a, b) => b[1] - a[1]);
+        report.strongestSkill = sorted[0][0];
+        report.weakestSkill = sorted[sorted.length - 1][0];
+      }
+
+      if (accuracy >= 0.7 && report.masteredRhythms.length < ALL_RHYTHM_PATTERNS.length) {
+        const nextRhythm = ALL_RHYTHM_PATTERNS.find(r => !report.masteredRhythms.includes(r));
+        if (nextRhythm) {
+          report.masteredRhythms = [...report.masteredRhythms, nextRhythm];
+        }
+      }
+
+      if (accuracy >= 0.8 && report.masteredKeys.length < ALL_KEY_SIGNATURES.length) {
+        const nextKey = ALL_KEY_SIGNATURES.find(k => !report.masteredKeys.includes(k));
+        if (nextKey) {
+          report.masteredKeys = [...report.masteredKeys, nextKey];
+        }
+      }
+
+      saveToStorage(STORAGE_KEYS.weeklyReport, report);
+      set({ weeklyReport: report });
+    }
+
+    return { stars, coins: coinReward, passed };
   },
 
   unlockNextLevel: (levelId) => {

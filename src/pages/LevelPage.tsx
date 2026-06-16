@@ -10,11 +10,15 @@ import type { Note } from '@/types';
 type GamePhase = 'ready' | 'countdown' | 'playing' | 'ended';
 
 const KEY_TO_NOTE: Record<string, string> = {
+  z: 'C3', x: 'D3', c: 'E3', v: 'F3',
+  b: 'G3', n: 'A3',
   a: 'C4', s: 'D4', d: 'E4', f: 'F4',
   g: 'G4', h: 'A4', j: 'B4', k: 'C5',
 };
 
 const NOTE_TO_KEY: Record<string, string> = {
+  C3: 'Z', D3: 'X', E3: 'C', F3: 'V',
+  G3: 'B', A3: 'N',
   C4: 'A', D4: 'S', E4: 'D', F4: 'F',
   G4: 'G', A4: 'H', B4: 'J', C5: 'K',
 };
@@ -47,8 +51,6 @@ export default function LevelPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const completeLevel = useGameStore(s => s.completeLevel);
-  const getLevelProgress = useGameStore(s => s.getLevelProgress);
-  const updateWeeklyReport = useGameStore(s => s.updateWeeklyReport);
   const player = useGameStore(s => s.player);
 
   const levelId = Number(id);
@@ -116,26 +118,11 @@ export default function LevelPage() {
     const total = allNotesRef.current.length;
     const acc = total > 0 ? correctCount / total : 0;
 
-    let stars = 0;
-    if (acc >= 0.9) stars = 3;
-    else if (acc >= 0.7) stars = 2;
-    else if (acc >= 0.5) stars = 1;
+    const result = completeLevel(levelId, acc);
 
-    setEarnedStars(stars);
-
-    const prev = getLevelProgress(levelId);
-    const isNew = !prev?.completedAt;
-    const coinReward = stars * 10 + (level?.isBoss ? 50 : 0) + (isNew ? 5 : 0);
-    setEarnedCoins(coinReward);
-
-    const resultStars = completeLevel(levelId, acc);
-
-    if (level?.skillType) {
-      updateWeeklyReport(level.skillType, acc * 100);
-    }
-
-    setEarnedStars(resultStars);
-  }, [correctCount, levelId, level, completeLevel, getLevelProgress, updateWeeklyReport, stopBeatTimer]);
+    setEarnedStars(result.stars);
+    setEarnedCoins(result.coins);
+  }, [correctCount, levelId, completeLevel, stopBeatTimer]);
 
   const advanceNote = useCallback(() => {
     const currentIdx = currentNoteIndexRef.current;
@@ -486,25 +473,49 @@ export default function LevelPage() {
           </div>
         </div>
 
-        <div className="w-full max-w-4xl flex items-center justify-center gap-1 mb-2 flex-wrap">
-          {['A=C4', 'S=D4', 'D=E4', 'F=F4', 'G=G4', 'H=A4', 'J=B4', 'K=C5'].map((mapping) => {
-            const [key, note] = mapping.split('=');
-            const currentNote = allNotesRef.current[currentNoteIndex];
-            const isExpected = phase === 'playing' && currentNote?.pitch === note;
-            return (
-              <div
-                key={key}
-                className={`flex flex-col items-center justify-center w-10 h-10 rounded-lg text-xs font-bold transition-all
-                  ${isExpected
-                    ? 'bg-orange-400 text-white scale-110 shadow-lg shadow-orange-300'
-                    : 'bg-white/60 text-gray-600'
-                  }`}
-              >
-                <span className="text-[10px] opacity-70">{note}</span>
-                <span>{key}</span>
-              </div>
-            );
-          })}
+        <div className="w-full max-w-4xl flex flex-col items-center gap-1 mb-2">
+          <div className="flex items-center gap-1 flex-wrap justify-center">
+            <span className="text-[10px] text-sky-500 font-bold mr-1">左手</span>
+            {['Z=C3', 'X=D3', 'C=E3', 'V=F3', 'B=G3', 'N=A3'].map((mapping) => {
+              const [key, note] = mapping.split('=');
+              const currentNote = allNotesRef.current[currentNoteIndex];
+              const isExpected = phase === 'playing' && currentNote?.pitch === note;
+              return (
+                <div
+                  key={key}
+                  className={`flex flex-col items-center justify-center w-10 h-10 rounded-lg text-xs font-bold transition-all
+                    ${isExpected
+                      ? 'bg-sky-400 text-white scale-110 shadow-lg shadow-sky-300'
+                      : 'bg-white/60 text-gray-600'
+                    }`}
+                >
+                  <span className="text-[10px] opacity-70">{note}</span>
+                  <span>{key}</span>
+                </div>
+              );
+            })}
+          </div>
+          <div className="flex items-center gap-1 flex-wrap justify-center">
+            <span className="text-[10px] text-primary font-bold mr-1">右手</span>
+            {['A=C4', 'S=D4', 'D=E4', 'F=F4', 'G=G4', 'H=A4', 'J=B4', 'K=C5'].map((mapping) => {
+              const [key, note] = mapping.split('=');
+              const currentNote = allNotesRef.current[currentNoteIndex];
+              const isExpected = phase === 'playing' && currentNote?.pitch === note;
+              return (
+                <div
+                  key={key}
+                  className={`flex flex-col items-center justify-center w-10 h-10 rounded-lg text-xs font-bold transition-all
+                    ${isExpected
+                      ? 'bg-orange-400 text-white scale-110 shadow-lg shadow-orange-300'
+                      : 'bg-white/60 text-gray-600'
+                    }`}
+                >
+                  <span className="text-[10px] opacity-70">{note}</span>
+                  <span>{key}</span>
+                </div>
+              );
+            })}
+          </div>
         </div>
 
         {phase === 'playing' && (

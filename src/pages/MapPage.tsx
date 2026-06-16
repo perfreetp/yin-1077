@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { MapPin, Star, Lock, ChevronDown, ChevronUp, Coins } from 'lucide-react';
+import { MapPin, Star, Lock, ChevronDown, ChevronUp, Coins, ShieldAlert, Clock } from 'lucide-react';
 import { useGameStore } from '@/store/gameStore';
 import { AREAS, getLevelsByArea } from '@/data/gameData';
 import { SKILL_LABELS } from '@/types';
@@ -28,10 +28,19 @@ const DIFFICULTY_COLORS: Record<string, string> = {
   hard: 'bg-coral text-red-900',
 };
 
+const DIFFICULTY_LEVELS: Record<string, number> = {
+  easy: 1,
+  medium: 2,
+  hard: 3,
+};
+
 export default function MapPage() {
   const navigate = useNavigate();
-  const { player, getAreaProgress, isLevelUnlocked, getLevelProgress } = useGameStore();
+  const { player, getAreaProgress, isLevelUnlocked, getLevelProgress, settings, isDailyTimeExceeded, todayPlayTime } = useGameStore();
   const [expandedArea, setExpandedArea] = useState<number | null>(null);
+  const [restrictionMsg, setRestrictionMsg] = useState<string | null>(null);
+
+  const timeExceeded = isDailyTimeExceeded();
 
   const toggleArea = (areaId: number) => {
     setExpandedArea(prev => (prev === areaId ? null : areaId));
@@ -61,6 +70,27 @@ export default function MapPage() {
         <h1 className="mb-5 text-center font-display text-3xl font-extrabold text-primary drop-shadow-sm">
           🗺️ 冒险地图
         </h1>
+
+        {timeExceeded && (
+          <div className="mb-4 flex items-center gap-2 rounded-2xl bg-coral/10 border-2 border-coral/30 px-4 py-3">
+            <Clock className="h-5 w-5 text-coral shrink-0" />
+            <p className="font-body text-sm text-coral">今日游戏时间已达上限，休息一下明天再冒险吧！</p>
+          </div>
+        )}
+
+        <AnimatePresence>
+          {restrictionMsg && (
+            <motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="mb-4 flex items-center gap-2 rounded-2xl bg-amber-50 border-2 border-amber-200 px-4 py-3"
+            >
+              <ShieldAlert className="h-5 w-5 text-amber-500 shrink-0" />
+              <p className="font-body text-sm text-amber-700">{restrictionMsg}</p>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         <div className="flex flex-col gap-4">
           {AREAS.map(area => {
@@ -129,39 +159,55 @@ export default function MapPage() {
                     >
                       <div className="flex flex-col gap-2.5 p-4">
                         {levels.map(level => {
-                          const unlocked = isLevelUnlocked(level.id);
+                          const baseUnlocked = isLevelUnlocked(level.id);
                           const levelProgress = getLevelProgress(level.id);
                           const starsEarned = levelProgress?.stars ?? 0;
                           const skillLabel = SKILL_LABELS[level.skillType] ?? level.skillType;
                           const diffClass = DIFFICULTY_COLORS[level.difficulty] ?? DIFFICULTY_COLORS.easy;
+                          const diffLevel = DIFFICULTY_LEVELS[level.difficulty] ?? 1;
+                          const difficultyBlocked = diffLevel > settings.maxDifficulty;
+                          const timeBlocked = timeExceeded;
+                          const playable = baseUnlocked && !difficultyBlocked && !timeBlocked;
+                          const restricted = baseUnlocked && (difficultyBlocked || timeBlocked);
 
                           return (
                             <motion.button
                               key={level.id}
-                              whileHover={unlocked ? { scale: 1.02 } : {}}
-                              whileTap={unlocked ? { scale: 0.98 } : {}}
-                              disabled={!unlocked}
+                              whileHover={playable ? { scale: 1.02 } : {}}
+                              whileTap={playable ? { scale: 0.98 } : {}}
+                              disabled={!playable && !restricted}
                               className={`flex items-center gap-3 rounded-xl border-2 p-3 text-left transition-colors ${
-                                unlocked
+                                playable
                                   ? 'border-cream bg-white hover:border-primary/40 hover:bg-primary/5'
-                                  : 'cursor-not-allowed border-gray-200 bg-gray-50 opacity-60'
+                                  : restricted
+                                    ? 'border-amber-200 bg-amber-50 cursor-pointer'
+                                    : 'cursor-not-allowed border-gray-200 bg-gray-50 opacity-60'
                               }`}
                               onClick={() => {
-                                if (unlocked) navigate(`/level/${level.id}`);
+                                if (playable) {
+                                  setRestrictionMsg(null);
+                                  navigate(`/level/${level.id}`);
+                                } else if (restricted) {
+                                  if (timeBlocked) {
+                                    setRestrictionMsg('今日游戏时间已达上限，请休息后再来冒险！');
+                                  } else if (difficultyBlocked) {
+                                    setRestrictionMsg('这个关卡难度较高，家长暂时还没解锁哦，先练习前面的关卡吧！');
+                                  }
+                                }
                               }}
                             >
                               <div
                                 className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-lg ${
-                                  unlocked ? 'bg-primary/10' : 'bg-gray-200'
+                                  playable ? 'bg-primary/10' : restricted ? 'bg-amber-100' : 'bg-gray-200'
                                 }`}
                               >
-                                {unlocked ? (level.isBoss ? '👹' : '🎵') : <Lock className="h-5 w-5 text-gray-400" />}
+                                {playable ? (level.isBoss ? '👹' : '🎵') : restricted ? <ShieldAlert className="h-5 w-5 text-amber-400" /> : <Lock className="h-5 w-5 text-gray-400" />}
                               </div>
 
                               <div className="flex-1 min-w-0">
                                 <p
                                   className={`font-display text-sm font-bold truncate ${
-                                    unlocked ? 'text-gray-800' : 'text-gray-400'
+                                    playable ? 'text-gray-800' : restricted ? 'text-amber-600' : 'text-gray-400'
                                   }`}
                                 >
                                   {level.name}

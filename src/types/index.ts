@@ -100,7 +100,20 @@ export interface WeeklyReport {
   levelsCompleted: number;
   strongestSkill: SkillType;
   weakestSkill: SkillType;
+  masteredRhythms: string[];
+  masteredKeys: string[];
 }
+
+export const ALL_RHYTHM_PATTERNS = [
+  '四分音符', '二分音符', '全音符', '八分音符',
+  '四分休止', '二分休止',
+  '附点二分', '附点四分',
+];
+
+export const ALL_KEY_SIGNATURES = [
+  'C大调', 'G大调', 'F大调', 'D大调',
+  'A小调', 'E小调',
+];
 
 export interface GameState {
   currentNoteIndex: number;

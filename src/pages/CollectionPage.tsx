@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { BookOpen, Target, TrendingUp, AlertCircle, CheckCircle } from 'lucide-react';
 import { useGameStore } from '@/store/gameStore';
-import { SKILL_LABELS, SKILL_DESCRIPTIONS } from '@/types';
+import { SKILL_LABELS, SKILL_DESCRIPTIONS, ALL_RHYTHM_PATTERNS, ALL_KEY_SIGNATURES } from '@/types';
 import type { SkillType } from '@/types';
 import { AREAS } from '@/data/gameData';
 
@@ -281,11 +281,77 @@ export default function CollectionPage() {
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: 20 }}
               transition={{ duration: 0.25 }}
-              className="mt-5 grid grid-cols-2 gap-3"
+              className="mt-5"
             >
-              {SKILL_ORDER.map(skill => (
-                <SkillCard key={skill} skill={skill} score={scores[skill]} />
-              ))}
+              <div className="grid grid-cols-2 gap-3">
+                {SKILL_ORDER.map(skill => (
+                  <SkillCard key={skill} skill={skill} score={scores[skill]} />
+                ))}
+              </div>
+
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.3 }}
+                className="mt-5 rounded-2xl border-2 border-cream-300 bg-white p-4 shadow-card"
+              >
+                <h2 className="mb-3 font-display text-base font-bold text-primary">
+                  🎵 已掌握节奏型
+                </h2>
+                <div className="flex flex-wrap gap-2">
+                  {ALL_RHYTHM_PATTERNS.map(rhythm => {
+                    const mastered = weeklyReport.masteredRhythms.includes(rhythm);
+                    return (
+                      <div
+                        key={rhythm}
+                        className={`flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-bold transition-all ${
+                          mastered
+                            ? 'bg-green-100 text-green-700 border border-green-300'
+                            : 'bg-gray-100 text-gray-400 border border-gray-200'
+                        }`}
+                      >
+                        {mastered && <CheckCircle className="h-3.5 w-3.5" />}
+                        {rhythm}
+                      </div>
+                    );
+                  })}
+                </div>
+                <p className="mt-2 font-body text-xs text-gray-400">
+                  已掌握 {weeklyReport.masteredRhythms.length}/{ALL_RHYTHM_PATTERNS.length}
+                </p>
+              </motion.div>
+
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.4 }}
+                className="mt-4 rounded-2xl border-2 border-cream-300 bg-white p-4 shadow-card"
+              >
+                <h2 className="mb-3 font-display text-base font-bold text-primary">
+                  🎹 已掌握调号
+                </h2>
+                <div className="flex flex-wrap gap-2">
+                  {ALL_KEY_SIGNATURES.map(key => {
+                    const mastered = weeklyReport.masteredKeys.includes(key);
+                    return (
+                      <div
+                        key={key}
+                        className={`flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-bold transition-all ${
+                          mastered
+                            ? 'bg-sky-100 text-sky-700 border border-sky-300'
+                            : 'bg-gray-100 text-gray-400 border border-gray-200'
+                        }`}
+                      >
+                        {mastered && <CheckCircle className="h-3.5 w-3.5" />}
+                        {key}
+                      </div>
+                    );
+                  })}
+                </div>
+                <p className="mt-2 font-body text-xs text-gray-400">
+                  已掌握 {weeklyReport.masteredKeys.length}/{ALL_KEY_SIGNATURES.length}
+                </p>
+              </motion.div>
             </motion.div>
           ) : (
             <motion.div
